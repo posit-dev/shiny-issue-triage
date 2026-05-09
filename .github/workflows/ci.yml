@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6.0.2
+
+      - name: Set up Python
+        uses: actions/setup-python@v6.2.0
+        with:
+          python-version: '3.13'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6.4.0
+        with:
+          node-version: '24'
+
+      - name: Install Python dependencies
+        run: python -m pip install --upgrade pip pyyaml
+
+      - name: Validate YAML
+        run: python .github/triage/scripts/validate-yaml.py
+
+      - name: Run Python checks
+        run: |
+          python -m py_compile \
+            .github/triage/scripts/resolve-repositories.py \
+            .github/triage/scripts/resolve-label-specs.py \
+            .github/triage/scripts/check-engine-guardrails.py
+          python -m unittest tests.test_resolve_label_specs -v
+
+      - name: Run Node checks
+        run: |
+          node --check .github/triage/scripts/create-github-app-token-map.mjs
+          node --check .github/triage/scripts/gh-token-router.mjs
+          node --check .github/triage/scripts/process-triage-actions.mjs
+          node --test tests/test_process_triage_actions.mjs tests/test_gh_token_router.mjs

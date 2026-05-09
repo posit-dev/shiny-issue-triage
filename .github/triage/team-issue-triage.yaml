@@ -1,0 +1,59 @@
+# Single source of truth for repos this workflow triages.
+# To add one: install the GitHub App, then append owner/repo below.
+# Entries may span owners if the same GitHub App is installed on each repo.
+repositories:
+  - rstudio/reactlog
+
+# Where report actions open issues. Must be listed above.
+report_repo: rstudio/reactlog
+
+scan:
+  schedule: weekly Thursday 08:00 UTC
+  max_issues_per_repo: 25
+  max_issues_total: 150
+  cursor_file: cursors.json
+  default_lookback_days: 14
+  skip_authors:
+    - dependabot[bot]
+    - github-actions[bot]
+  skip_labels:
+    - ai-triage:done
+    - ai-triage:accepted
+    - human-reviewed
+  include_updated_issues: true
+  include_created_issues: true
+
+engine:
+  provider: claude-code-oauth
+  action: anthropics/claude-code-action
+  env:
+    - CLAUDE_CODE_OAUTH_TOKEN
+    - ANTHROPIC_MODEL
+  forbidden_secrets:
+    - ANTHROPIC_API_KEY
+    - AWS_BEDROCK_ROLE_TO_ASSUME
+  forbidden_direct_endpoints:
+    - api.githubcopilot.com
+    - githubcopilot.com
+
+state:
+  branch: triage-state
+  directory: .triage-state
+  files:
+    cursors: cursors.json
+    issue_snapshots: issues/<owner-repo>.jsonl
+    triage_results: triage-results/<YYYY-MM-DD>.jsonl
+    duplicate_candidates: duplicates/candidates.jsonl
+
+automation:
+  structured_outputs: true
+  ai_threat_detection: false
+  allow_direct_comments: false
+  allow_auto_close: false
+  allow_auto_transfer: false
+  require_human_review_for:
+    - "Priority: Critical"
+    - security-sensitive
+    - public comment
+    - wrong location
+    - low confidence
