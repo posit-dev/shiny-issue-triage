@@ -60,6 +60,20 @@ jobs:
           TRIAGE_CONFIG: ${{ env.TRIAGE_CONFIG }}
         run: python .github/triage/scripts/resolve-repositories.py
 
+      - name: Check GitHub App credentials
+        env:
+          GITHUB_APP_CLIENT_ID: ${{ secrets['POSIT_SHINY_AUTOMATION_CLIENT_ID'] }}
+          GITHUB_APP_PRIVATE_KEY: ${{ secrets['POSIT_SHINY_AUTOMATION_PEM'] }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [[ -n "${GITHUB_APP_CLIENT_ID}" ]] || missing+=("POSIT_SHINY_AUTOMATION_CLIENT_ID")
+          [[ -n "${GITHUB_APP_PRIVATE_KEY}" ]] || missing+=("POSIT_SHINY_AUTOMATION_PEM")
+          if (( ${#missing[@]} )); then
+            printf '::error::Missing required GitHub App secret(s): %s. Add them as repository secrets or grant this repository access to the matching organization secrets.\n' "${missing[*]}"
+            exit 1
+          fi
+
       - name: Generate GitHub App token maps
         id: app-tokens
         env:
