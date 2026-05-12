@@ -42,13 +42,6 @@ def main():
         seen.add(repo)
         owner_repos.append(repo)
 
-    report_repo = cfg.get("report_repo") or owner_repos[0]
-    if report_repo not in owner_repos:
-        fail(
-            f"report_repo={report_repo!r} must be one of the allowlisted repositories "
-            f"({owner_repos}). Add it to repositories: first."
-        )
-
     scan_cfg = cfg.get("scan") or {}
     max_issues_per_repo = scan_cfg.get("max_issues_per_repo") or 0
     max_issues_total = scan_cfg.get("max_issues_total") or 0
@@ -58,7 +51,6 @@ def main():
         "owner_repos": ",".join(owner_repos),
         "owners": ",".join(owners),
         "repo_count": str(len(owner_repos)),
-        "report_repo": report_repo,
         "max_issues_per_repo": str(int(max_issues_per_repo)),
         "max_issues_total": str(int(max_issues_total)),
     }
@@ -66,7 +58,6 @@ def main():
 
     print(f"owners={values['owners']}")
     print(f"owner_repos={values['owner_repos']}")
-    print(f"report_repo={report_repo}")
     print(f"max_issues_per_repo={values['max_issues_per_repo']}")
     print(f"max_issues_total={values['max_issues_total']}")
 

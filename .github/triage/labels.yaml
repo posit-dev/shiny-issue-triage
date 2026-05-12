@@ -43,7 +43,6 @@ review:
   - ai-triage:done
 
 reporting:
-  - ai-triage:report
   - ai-generated-issue
 
 allowed_safe_output_labels:
@@ -62,5 +61,3 @@ allowed_safe_output_labels:
   - ai-triage:bad-label
   - ai-triage:bad-comment
   - ai-triage:done
-  - ai-triage:report
-  - ai-generated-issue

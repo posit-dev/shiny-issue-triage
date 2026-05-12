@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 // Validates and applies the structured output produced by the Claude triage
 // step. The model output is treated as untrusted: every action is checked
-// against the repo and label allowlists, every comment is sanitized and
-// derived from a deterministic template, and every report body is matched
-// against a fixed structure before it is posted.
+// against the repo and label allowlists, and only labels are ever written.
 
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -26,7 +24,6 @@ const REPORT_SECTIONS = Object.freeze([
   '## Recommended next action',
   '## Confidence',
 ]);
-const REPORT_LABELS = Object.freeze(['ai-triage:report', 'ai-generated-issue']);
 
 const CLASSIFICATION_LABELS = new Set([
   'regression',
@@ -36,30 +33,89 @@ const CLASSIFICATION_LABELS = new Set([
   'needs clarification',
 ]);
 
-// Comments are only ever posted as one of these deterministic templates,
-// keyed off the model's classification label. The model-supplied free text
-// is sanitized and inserted into the `{details}` slot.
-const COMMENT_TEMPLATES = Object.freeze({
-  'needs reprex': [
-    'Thanks for the report. To investigate this we need a minimal reproducible example (reprex):',
-    '- A small, runnable Shiny app or script that triggers the behavior.',
-    '- The exact steps you ran and what you observed versus what you expected.',
-    '- The output of `sessionInfo()` (R) or `pip list` / `python -V` (Python), and your browser if relevant.',
-    '',
-    'Reporter context provided by triage:',
-    '',
-    '{details}',
-  ].join('\n'),
-  'needs clarification': [
-    'Thanks for the report. Before we can route this we need a bit more information:',
-    '',
-    '{details}',
-  ].join('\n'),
-});
+// These helpers remain exported for the unit tests and for any downstream
+// code that still imports them, even though the workflow no longer posts
+// comments or creates report issues.
+const CONTROL_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F]/g;
+const MENTION_RE = /@([A-Za-z0-9][A-Za-z0-9-]*(?:\/[A-Za-z0-9._-]+)?)/g;
+const URL_RE = /https?:\/\/\S+/gi;
+const CROSS_REPO_REF_RE = /\b[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9._-]+#\d+\b/g;
+const GH_SHORT_REF_RE = /\bGH-\d+\b/g;
 
-const COMMENT_FOOTER =
-  '\n\n_Posted by the Team Issue Triage workflow. ' +
-  'A maintainer will follow up; please reply in this thread._';
+export function neuterMentions(text) {
+  return String(text).replace(MENTION_RE, '`@$1`');
+}
+
+export function sanitizeComment(raw) {
+  const stripped = String(raw).replace(CONTROL_CHARS, '').trim();
+  if (!stripped) {
+    throw new Error('Comment is empty after sanitization.');
+  }
+  if (stripped.length > LIMITS.comment) {
+    throw new Error(`Comment too long: ${stripped.length} > ${LIMITS.comment}`);
+  }
+  if (URL_RE.test(stripped)) {
+    throw new Error('Comment may not contain URLs.');
+  }
+  if (CROSS_REPO_REF_RE.test(stripped) || GH_SHORT_REF_RE.test(stripped)) {
+    throw new Error('Comment may not reference issues in other repositories.');
+  }
+  return neuterMentions(stripped);
+}
+
+export function commentKindForLabels(labels) {
+  const classification = labels.filter((label) => CLASSIFICATION_LABELS.has(label));
+  if (classification.length !== 1) return null;
+  const kind = classification[0];
+  return kind === 'needs reprex' || kind === 'needs clarification' ? kind : null;
+}
+
+export function buildComment(kind, sanitizedDetails) {
+  const template = {
+    'needs reprex': [
+      'Thanks for the report. To investigate this we need a minimal reproducible example (reprex):',
+      '- A small, runnable Shiny app or script that triggers the behavior.',
+      '- The exact steps you ran and what you observed versus what you expected.',
+      '- The output of `sessionInfo()` (R) or `pip list` / `python -V` (Python), and your browser if relevant.',
+      '',
+      'Reporter context provided by triage:',
+      '',
+      '{details}',
+    ].join('\n'),
+    'needs clarification': [
+      'Thanks for the report. Before we can route this we need a bit more information:',
+      '',
+      '{details}',
+    ].join('\n'),
+  }[kind];
+  if (!template) {
+    throw new Error(`Unknown comment template: ${kind}`);
+  }
+  return `${template.replace('{details}', sanitizedDetails)}\n\n_Posted by the Team Issue Triage workflow. A maintainer will follow up; please reply in this thread._`;
+}
+
+export function sanitizeReportBody(raw) {
+  const stripped = String(raw).replace(CONTROL_CHARS, '');
+  if (stripped.length > LIMITS.report) {
+    throw new Error(`Report body is too long: ${stripped.length} > ${LIMITS.report}`);
+  }
+  for (const heading of REPORT_SECTIONS) {
+    if (!stripped.includes(heading)) {
+      throw new Error(`Report body is missing required section heading: ${heading}`);
+    }
+  }
+  return neuterMentions(stripped);
+}
+
+export function validateReportTitle(title) {
+  if (!title) throw new Error('report_title is required.');
+  if (title.length > LIMITS.reportTitle) {
+    throw new Error(`Report title is too long: ${title.length} > ${LIMITS.reportTitle}`);
+  }
+  if (!REPORT_TITLE_RE.test(title)) {
+    throw new Error(`Report title must match 'triage(<scope>): <summary>': ${title}`);
+  }
+}
 
 function fail(message) {
   console.error(message);
@@ -106,114 +162,15 @@ function parseClaudeOutput(raw) {
   return {};
 }
 
-function buildReportFooter() {
-  const runUrl =
-    process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY && process.env.GITHUB_RUN_ID
-      ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
-      : '';
-  const lines = [
-    '',
-    '---',
-    '',
-    '<sub>',
-    'This issue was generated by the Team Issue Triage workflow.',
-    runUrl ? `Workflow run: ${runUrl}` : null,
-    process.env.ANTHROPIC_MODEL ? `Model: \`${process.env.ANTHROPIC_MODEL}\`` : null,
-    `Generated at: ${new Date().toISOString()}`,
-    'Labels applied: `ai-triage:report`, `ai-generated-issue`.',
-    '</sub>',
-    '',
-  ].filter((line) => line !== null);
-  return lines.join('\n');
-}
-
-// --------------------------------------------------------------------------
-// Sanitization helpers (exported for tests)
-// --------------------------------------------------------------------------
-
-const CONTROL_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F]/g;
-const MENTION_RE = /@([A-Za-z0-9][A-Za-z0-9-]*(?:\/[A-Za-z0-9._-]+)?)/g;
-const URL_RE = /https?:\/\/\S+/gi;
-const CROSS_REPO_REF_RE = /\b[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9._-]+#\d+\b/g;
-const GH_SHORT_REF_RE = /\bGH-\d+\b/g;
-
-export function neuterMentions(text) {
-  return String(text).replace(MENTION_RE, '`@$1`');
-}
-
-export function sanitizeComment(raw) {
-  const stripped = String(raw).replace(CONTROL_CHARS, '').trim();
-  if (!stripped) {
-    throw new Error('Comment is empty after sanitization.');
-  }
-  if (stripped.length > LIMITS.comment) {
-    throw new Error(`Comment too long: ${stripped.length} > ${LIMITS.comment}`);
-  }
-  if (URL_RE.test(stripped)) {
-    throw new Error('Comment may not contain URLs.');
-  }
-  if (CROSS_REPO_REF_RE.test(stripped) || GH_SHORT_REF_RE.test(stripped)) {
-    throw new Error('Comment may not reference issues in other repositories.');
-  }
-  return neuterMentions(stripped);
-}
-
-export function commentKindForLabels(labels) {
-  const classification = labels.filter((label) => CLASSIFICATION_LABELS.has(label));
-  if (classification.length !== 1) return null;
-  const kind = classification[0];
-  return COMMENT_TEMPLATES[kind] ? kind : null;
-}
-
-export function buildComment(kind, sanitizedDetails) {
-  const template = COMMENT_TEMPLATES[kind];
-  if (!template) {
-    throw new Error(`Unknown comment template: ${kind}`);
-  }
-  return `${template.replace('{details}', sanitizedDetails)}${COMMENT_FOOTER}`;
-}
-
-export function sanitizeReportBody(raw) {
-  const stripped = String(raw).replace(CONTROL_CHARS, '');
-  if (stripped.length > LIMITS.report) {
-    throw new Error(`Report body is too long: ${stripped.length} > ${LIMITS.report}`);
-  }
-  for (const heading of REPORT_SECTIONS) {
-    if (!stripped.includes(heading)) {
-      throw new Error(`Report body is missing required section heading: ${heading}`);
-    }
-  }
-  return neuterMentions(stripped);
-}
-
-export function validateReportTitle(title) {
-  if (!title) throw new Error('report_title is required.');
-  if (title.length > LIMITS.reportTitle) {
-    throw new Error(`Report title is too long: ${title.length} > ${LIMITS.reportTitle}`);
-  }
-  if (!REPORT_TITLE_RE.test(title)) {
-    throw new Error(`Report title must match 'triage(<scope>): <summary>': ${title}`);
-  }
-}
-
-// --------------------------------------------------------------------------
-// gh wrapper
-// --------------------------------------------------------------------------
-
-function runGh(args, { input, token }) {
+function runGh(args, { token }) {
   if (!token) {
     fail('runGh called without a token.');
   }
   execFileSync('gh', args, {
-    stdio: input ? ['pipe', 'inherit', 'inherit'] : 'inherit',
-    input,
+    stdio: 'inherit',
     env: { ...process.env, GH_TOKEN: token },
   });
 }
-
-// --------------------------------------------------------------------------
-// Main
-// --------------------------------------------------------------------------
 
 function main() {
   const allowedRepos = new Set(splitCsv(env('TRIAGE_ALLOWED_REPOS')));
@@ -223,10 +180,6 @@ function main() {
   const allowedLabels = new Set(splitCsv(env('TRIAGE_ALLOWED_LABELS')));
   if (allowedLabels.size === 0) {
     fail('TRIAGE_ALLOWED_LABELS is empty. Check labels.yaml allowed_safe_output_labels.');
-  }
-  const reportRepo = env('TRIAGE_REPORT_REPO');
-  if (!allowedRepos.has(reportRepo)) {
-    fail(`TRIAGE_REPORT_REPO=${reportRepo} must be in TRIAGE_ALLOWED_REPOS.`);
   }
   const maxIssuesPerRepo = parseInt(env('TRIAGE_MAX_ISSUES_PER_REPO', { required: false }) || '0', 10);
 
@@ -243,11 +196,15 @@ function main() {
     fail(`Too many triage actions: ${items.length} > ${LIMITS.actions}`);
   }
 
-  const reportFooter = buildReportFooter();
   const summary = [];
   const perRepoCounts = new Map();
 
-  const processTriage = (item) => {
+  for (const item of items) {
+    const action = String(item.action || '').toLowerCase();
+    if (action !== 'triage') {
+      fail(`Unknown triage action: ${item.action}`);
+    }
+
     const repo = String(item.repo || '');
     const issueNumber = String(item.issue_number || '');
     if (!allowedRepos.has(repo)) fail(`Repository is not allowlisted: ${repo}`);
@@ -272,86 +229,19 @@ function main() {
     const target = `${repo}#${issueNumber}`;
     const token = tokenForRepo(repo);
 
+    for (const label of labels) {
+      runGh(['issue', 'edit', issueNumber, '--repo', repo, '--add-label', label], { token });
+    }
+
     if (labels.length) {
-      for (const label of labels) {
-        runGh(['issue', 'edit', issueNumber, '--repo', repo, '--add-label', label], { token });
-      }
       summary.push(`Applied labels to ${target}: ${labels.join(', ')}`);
+    } else {
+      summary.push(`No labels applied to ${target}.`);
     }
-
-    if (item.comment) {
-      const kind = commentKindForLabels(labels);
-      if (!kind) {
-        summary.push(
-          `Skipped comment for ${target}: comment posting requires exactly one of ` +
-            `'needs reprex' or 'needs clarification'.`,
-        );
-        return;
-      }
-      let sanitized;
-      try {
-        sanitized = sanitizeComment(item.comment);
-      } catch (error) {
-        summary.push(`Skipped comment for ${target}: ${error.message}`);
-        return;
-      }
-      const body = buildComment(kind, sanitized);
-      runGh(['issue', 'comment', issueNumber, '--repo', repo, '--body-file', '-'], {
-        input: body,
-        token,
-      });
-      summary.push(`Posted '${kind}' comment to ${target} (model 'comment_approved' is advisory and ignored).`);
-    }
-  };
-
-  const createReport = (item) => {
-    const title = String(item.report_title || '');
-    const body = String(item.report_body || '');
-    try {
-      validateReportTitle(title);
-    } catch (error) {
-      fail(error.message);
-    }
-    let sanitizedBody;
-    try {
-      sanitizedBody = sanitizeReportBody(body);
-    } catch (error) {
-      fail(error.message);
-    }
-    const finalBody = `${sanitizedBody.trimEnd()}\n${reportFooter}`;
-    if (finalBody.length > LIMITS.report) {
-      fail(`Report body is too long after footer: ${finalBody.length} > ${LIMITS.report}`);
-    }
-    const token = tokenForRepo(reportRepo);
-    const labelArgs = REPORT_LABELS.flatMap((label) => ['--label', label]);
-    try {
-      runGh(
-        ['issue', 'create', '--repo', reportRepo, '--title', title, '--body-file', '-', ...labelArgs],
-        { input: finalBody, token },
-      );
-    } catch (error) {
-      console.warn(`Could not create report with labels ${REPORT_LABELS.join(', ')}; retrying without labels.`);
-      runGh(['issue', 'create', '--repo', reportRepo, '--title', title, '--body-file', '-'], {
-        input: finalBody,
-        token,
-      });
-    }
-    summary.push(`Created report issue: ${title}`);
-  };
+  }
 
   if (!items.length) {
     summary.push('No triage actions were emitted.');
-  }
-
-  for (const item of items) {
-    const action = String(item.action || '').toLowerCase();
-    if (action === 'triage') {
-      processTriage(item);
-    } else if (action === 'report') {
-      createReport(item);
-    } else {
-      fail(`Unknown triage action: ${item.action}`);
-    }
   }
 
   const heading = 'Team Issue Triage Applied Changes';

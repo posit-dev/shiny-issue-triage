@@ -6,7 +6,7 @@ Authentication comes from a Claude Code OAuth token created with `claude setup-t
 
 ## Files in this directory
 
-- `team-issue-triage.yaml` defines the repo allowlist, report repo, scan limits, provider guardrails, and state paths.
+- `team-issue-triage.yaml` defines the repo allowlist, scan limits, provider guardrails, and state paths.
 - `labels.yaml` defines the label taxonomy and the `allowed_safe_output_labels` list used by the post-processing validator.
 - `issue-triage-rubric.md` is the rubric passed to Claude.
 - `scripts/` contains the repository resolver, label spec resolver, GitHub App token map generator, and the `gh` token router.
@@ -23,7 +23,7 @@ Required secrets and variables:
 
 Do not set `ANTHROPIC_API_KEY` or `AWS_BEDROCK_ROLE_TO_ASSUME` for this workflow. Claude Code gets its credentials from `CLAUDE_CODE_OAUTH_TOKEN`.
 
-The post-processing step applies validated labels, report issues, and approved comments. It also writes progress and audit records to `triage-results/*.jsonl` on the `triage-state` branch.
+The post-processing step applies validated labels only. It also writes progress and audit records to `triage-results/*.jsonl` on the `triage-state` branch.
 
 ## Adding repositories
 
@@ -40,15 +40,6 @@ repositories:
   - rstudio/repo-a
   - posit-dev/repo-b
   - another-org/repo-c
-report_repo: rstudio/repo-a
 ```
-
-## Issue and commit style
-
-Report issues opened by the workflow use a conventional-commit-style title: `triage(<scope>): <imperative summary>`. Keep the title under 72 characters and do not end it with a period. Use the short repo name for `<scope>`, or `cross-repo` when the report spans repositories.
-
-Report bodies must include these sections in this order: `## Summary`, `## Affected repositories`, `## Evidence`, `## Recommended next action`, and `## Confidence`. The workflow adds a standard footer with the workflow run link, model, timestamp, and applied labels.
-
-Every report issue should carry `ai-triage:report` and `ai-generated-issue`. The workflow synchronizes those labels into the report repo before triage actions are processed.
 
 Updates to the `triage-state` branch are committed as `chore(triage): update team issue triage state`, with a body that references the workflow run.
