@@ -151,7 +151,7 @@ jobs:
 
       - name: Run Claude triage
         id: claude
-        uses: anthropics/claude-code-action@v1.0.92
+        uses: anthropics/claude-code-action@v1.0.122
         env:
           GH_TOKEN: ${{ github.token }}
           TRIAGE_GH_TOKENS_FILE: ${{ steps.app-tokens.outputs.read_tokens_file }}
