@@ -1,0 +1,3 @@
+{"number":1312,"title":"navset_underline() does not propagate fill but navset_card_underline does","author":"tsolloway","createdAt":"2026-05-13T19:57:27Z","updatedAt":"2026-05-13T19:57:27Z","labels":[],"url":"https://github.com/rstudio/bslib/issues/1312"}
+{"number":1311,"title":"Toolbar: Add tiny file input","author":"elnelson575","createdAt":"2026-05-12T18:28:37Z","updatedAt":"2026-05-12T18:28:37Z","labels":[],"url":"https://github.com/rstudio/bslib/issues/1311"}
+{"number":1305,"title":"input$my_card_full_screen should not exist for cards that don't have full_screen=TRUE","author":"daattali","createdAt":"2026-04-30T20:24:51Z","updatedAt":"2026-04-30T20:24:51Z","labels":[],"url":"https://github.com/rstudio/bslib/issues/1305"}
