@@ -7,6 +7,8 @@ import assert from 'node:assert/strict';
 import {
   buildComment,
   commentKindForLabels,
+  formatPriorityBadge,
+  formatSummary,
   neuterMentions,
   sanitizeComment,
   sanitizeReportBody,
@@ -95,4 +97,86 @@ test('sanitizeReportBody rejects bodies missing required sections', () => {
     () => sanitizeReportBody('## Summary only'),
     /missing required section/,
   );
+});
+
+test('formatPriorityBadge returns emoji badge for known priorities', () => {
+  assert.equal(formatPriorityBadge('Priority: Critical'), '🔴 Critical');
+  assert.equal(formatPriorityBadge('Priority: High'), '🟠 High');
+  assert.equal(formatPriorityBadge('Priority: Medium'), '🟡 Medium');
+  assert.equal(formatPriorityBadge('Priority: Low'), '🟢 Low');
+});
+
+test('formatPriorityBadge returns null for unknown labels', () => {
+  assert.equal(formatPriorityBadge('regression'), null);
+  assert.equal(formatPriorityBadge(''), null);
+});
+
+test('formatSummary returns blockquote when no actions applied', () => {
+  const out = formatSummary('Nothing to do.', []);
+  assert.match(out, /No triage actions were emitted/);
+  assert.ok(!out.includes('## Overview'));
+});
+
+test('formatSummary includes overview table with correct counts', () => {
+  const applied = [
+    { repo: 'rstudio/shiny', issue: '100', labels: ['Priority: High'], confidence: 'high' },
+    { repo: 'rstudio/shiny', issue: '101', labels: ['Priority: Low', 'needs reprex'], confidence: 'medium' },
+    { repo: 'posit-dev/py-shiny', issue: '200', labels: ['Priority: Low'], confidence: 'low' },
+  ];
+  const out = formatSummary('Test summary', applied);
+  assert.match(out, /Issues triaged \| 3/);
+  assert.match(out, /Repositories \| 2/);
+  assert.match(out, /🟠 High \| 1/);
+  assert.match(out, /🟢 Low \| 2/);
+  assert.ok(!out.includes('🔴 Critical'));
+  assert.ok(!out.includes('🟡 Medium'));
+});
+
+test('formatSummary groups issues by repository with tables', () => {
+  const applied = [
+    { repo: 'rstudio/shiny', issue: '10', labels: ['Priority: Medium'], confidence: 'high' },
+    { repo: 'posit-dev/py-shiny', issue: '20', labels: ['regression', 'Priority: High'], confidence: 'medium' },
+  ];
+  const out = formatSummary(null, applied);
+  assert.match(out, /### rstudio\/shiny/);
+  assert.match(out, /### posit-dev\/py-shiny/);
+  assert.match(out, /\[#10\]\(https:\/\/github\.com\/rstudio\/shiny\/issues\/10\)/);
+  assert.match(out, /\[#20\]\(https:\/\/github\.com\/posit-dev\/py-shiny\/issues\/20\)/);
+  assert.match(out, /`regression`/);
+  assert.ok(!out.includes('<details>'));
+});
+
+test('formatSummary renders confidence indicators', () => {
+  const applied = [
+    { repo: 'rstudio/shiny', issue: '1', labels: ['Priority: Low'], confidence: 'high' },
+    { repo: 'rstudio/shiny', issue: '2', labels: ['Priority: Low'], confidence: 'medium' },
+    { repo: 'rstudio/shiny', issue: '3', labels: ['Priority: Low'], confidence: 'low' },
+  ];
+  const out = formatSummary('s', applied);
+  assert.match(out, /✅ high/);
+  assert.match(out, /⚠️ medium/);
+  assert.match(out, /❓ low/);
+});
+
+test('formatSummary wraps Claude summary in collapsible details', () => {
+  const applied = [
+    { repo: 'rstudio/shiny', issue: '1', labels: ['Priority: Low'], confidence: 'high' },
+  ];
+  const out = formatSummary('A detailed summary.', applied);
+  assert.match(out, /<details>/);
+  assert.match(out, /<summary>Claude summary<\/summary>/);
+  assert.match(out, /A detailed summary\./);
+  assert.match(out, /<\/details>/);
+});
+
+test('formatSummary shows dash for issues without priority labels', () => {
+  const applied = [
+    { repo: 'rstudio/shiny', issue: '5', labels: ['needs clarification', 'ai-triage:needs-review'], confidence: 'low' },
+  ];
+  const out = formatSummary(null, applied);
+  const tableLines = out.split('\n').filter((l) => l.startsWith('| ['));
+  assert.equal(tableLines.length, 1);
+  assert.match(tableLines[0], /\| — \|/);
+  assert.match(tableLines[0], /`needs clarification`/);
+  assert.match(tableLines[0], /`ai-triage:needs-review`/);
 });

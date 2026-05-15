@@ -172,6 +172,93 @@ function runGh(args, { token }) {
   });
 }
 
+const PRIORITY_BADGES = new Map([
+  ['Priority: Critical', '🔴 Critical'],
+  ['Priority: High', '🟠 High'],
+  ['Priority: Medium', '🟡 Medium'],
+  ['Priority: Low', '🟢 Low'],
+]);
+
+export function formatPriorityBadge(label) {
+  return PRIORITY_BADGES.get(label) || null;
+}
+
+export function formatSummary(claudeSummary, applied) {
+  const lines = [];
+  lines.push('# Team Issue Triage Applied Changes');
+  lines.push('');
+
+  if (!applied.length) {
+    lines.push('> No triage actions were emitted.');
+    lines.push('');
+    return lines.join('\n');
+  }
+
+  const repos = new Set(applied.map((a) => a.repo));
+  const priorityCounts = new Map();
+  for (const entry of applied) {
+    for (const label of entry.labels) {
+      if (PRIORITY_BADGES.has(label)) {
+        priorityCounts.set(label, (priorityCounts.get(label) || 0) + 1);
+      }
+    }
+  }
+
+  lines.push('## Overview');
+  lines.push('');
+  lines.push('| Metric | Count |');
+  lines.push('| --- | ---: |');
+  lines.push(`| Issues triaged | ${applied.length} |`);
+  lines.push(`| Repositories | ${repos.size} |`);
+  for (const [label, badge] of PRIORITY_BADGES) {
+    const count = priorityCounts.get(label) || 0;
+    if (count > 0) {
+      lines.push(`| ${badge} | ${count} |`);
+    }
+  }
+  lines.push('');
+
+  if (claudeSummary) {
+    lines.push('<details>');
+    lines.push('<summary>Claude summary</summary>');
+    lines.push('');
+    lines.push(claudeSummary);
+    lines.push('');
+    lines.push('</details>');
+    lines.push('');
+  }
+
+  const byRepo = new Map();
+  for (const entry of applied) {
+    if (!byRepo.has(entry.repo)) byRepo.set(entry.repo, []);
+    byRepo.get(entry.repo).push(entry);
+  }
+
+  for (const [repo, entries] of byRepo) {
+    lines.push(`### ${repo}`);
+    lines.push('');
+    lines.push('| Issue | Priority | Labels | Confidence |');
+    lines.push('| --- | --- | --- | --- |');
+    for (const entry of entries) {
+      const issueLink = `[#${entry.issue}](https://github.com/${repo}/issues/${entry.issue})`;
+      const priorityLabel = entry.labels.find((l) => PRIORITY_BADGES.has(l));
+      const priority = priorityLabel ? formatPriorityBadge(priorityLabel) : '—';
+      const otherLabels = entry.labels
+        .filter((l) => !PRIORITY_BADGES.has(l))
+        .map((l) => `\`${l}\``)
+        .join(', ') || '—';
+      const confidence = entry.confidence === 'high' ? '✅ high'
+        : entry.confidence === 'medium' ? '⚠️ medium'
+        : entry.confidence === 'low' ? '❓ low'
+        : entry.confidence;
+      lines.push(`| ${issueLink} | ${priority} | ${otherLabels} | ${confidence} |`);
+    }
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
 function main() {
   const allowedRepos = new Set(splitCsv(env('TRIAGE_ALLOWED_REPOS')));
   if (allowedRepos.size === 0) {
@@ -196,7 +283,7 @@ function main() {
     fail(`Too many triage actions: ${items.length} > ${LIMITS.actions}`);
   }
 
-  const summary = [];
+  const applied = [];
   const perRepoCounts = new Map();
 
   for (const item of items) {
@@ -226,33 +313,21 @@ function main() {
       if (!allowedLabels.has(label)) fail(`Label is not allowlisted: ${label}`);
     }
 
-    const target = `${repo}#${issueNumber}`;
     const token = tokenForRepo(repo);
 
     for (const label of labels) {
       runGh(['issue', 'edit', issueNumber, '--repo', repo, '--add-label', label], { token });
     }
 
-    if (labels.length) {
-      summary.push(`Applied labels to ${target}: ${labels.join(', ')}`);
-    } else {
-      summary.push(`No labels applied to ${target}.`);
-    }
+    applied.push({
+      repo,
+      issue: issueNumber,
+      labels,
+      confidence: String(item.confidence || 'unknown'),
+    });
   }
 
-  if (!items.length) {
-    summary.push('No triage actions were emitted.');
-  }
-
-  const heading = 'Team Issue Triage Applied Changes';
-  const body = [
-    `# ${heading}`,
-    '',
-    `Claude summary: ${output.summary || 'No summary provided.'}`,
-    '',
-    ...summary.map((line) => `- ${line}`),
-    '',
-  ].join('\n');
+  const body = formatSummary(output.summary, applied);
   if (process.env.GITHUB_STEP_SUMMARY) {
     fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, body);
   }
