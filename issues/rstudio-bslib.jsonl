@@ -3,3 +3,5 @@
 {"number":1305,"title":"input$my_card_full_screen should not exist for cards that don't have full_screen=TRUE","author":"daattali","createdAt":"2026-04-30T20:24:51Z","updatedAt":"2026-04-30T20:24:51Z","labels":[],"url":"https://github.com/rstudio/bslib/issues/1305"}
 {"number":1317,"title":"Toolbars: Add align=\"center\"","author":"elnelson575","createdAt":"2026-05-20T15:29:29Z","updatedAt":"2026-05-20T15:29:29Z","labels":[],"url":"https://github.com/rstudio/bslib/issues/1317"}
 {"number":1316,"title":"Toolbar: Add `toolbar_badge()`","author":"gadenbuie","createdAt":"2026-05-18T14:27:43Z","updatedAt":"2026-05-18T14:27:43Z","labels":[],"url":"https://github.com/rstudio/bslib/issues/1316"}
+{"number":1317,"title":"Toolbars: Add align=\"center\"","author":"elnelson575","createdAt":"2026-05-20T15:29:29Z","updatedAt":"2026-05-21T09:25:13Z","labels":["Priority: Low"],"url":"https://github.com/rstudio/bslib/issues/1317"}
+{"number":1316,"title":"Toolbar: Add `toolbar_badge()`","author":"gadenbuie","createdAt":"2026-05-18T14:27:43Z","updatedAt":"2026-05-21T09:25:14Z","labels":["Priority: Low"],"url":"https://github.com/rstudio/bslib/issues/1316"}
