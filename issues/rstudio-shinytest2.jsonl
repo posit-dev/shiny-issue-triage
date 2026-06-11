@@ -1,0 +1,1 @@
+{"number":448,"title":"Intermittent \"did not become stable\" at init: `AppDriver$new()` navigates before the app's port is bound","author":"nbenn","createdAt":"2026-06-09T12:49:24Z","updatedAt":"2026-06-09T12:49:24Z","labels":[],"url":"https://github.com/rstudio/shinytest2/issues/448"}

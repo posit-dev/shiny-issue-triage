@@ -1,3 +1,5 @@
 {"number":4381,"title":"OpenTelemetry traces on server starting up","author":"marcosnav","createdAt":"2026-05-09T01:53:43Z","updatedAt":"2026-05-13T15:53:50Z","labels":[],"url":"https://github.com/rstudio/shiny/issues/4381"}
 {"number":4379,"title":"Observers do no *completely* ignores return as documentation says.","author":"rikivillalba","createdAt":"2026-05-07T20:35:02Z","updatedAt":"2026-05-07T20:35:02Z","labels":[],"url":"https://github.com/rstudio/shiny/issues/4379"}
 {"number":4365,"title":"feat: llms.txt","author":"JosiahParry","createdAt":"2026-03-09T20:53:47Z","updatedAt":"2026-05-08T17:47:30Z","labels":[],"url":"https://github.com/rstudio/shiny/issues/4365"}
+{"number":4400,"title":"Shiny's `startApp()` prints \"Listening on …\" before binding the listening socket","author":"nbenn","createdAt":"2026-06-09T12:34:59Z","updatedAt":"2026-06-09T12:51:40Z","labels":[],"url":"https://github.com/rstudio/shiny/issues/4400"}
+{"number":4330,"title":"Consider moving from `selectize.js` to `tom-select`","author":"gadenbuie","createdAt":"2025-12-04T13:08:19Z","updatedAt":"2026-06-08T22:21:28Z","labels":[],"url":"https://github.com/rstudio/shiny/issues/4330"}
