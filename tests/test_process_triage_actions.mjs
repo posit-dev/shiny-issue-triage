@@ -10,6 +10,7 @@ import {
   formatPriorityBadge,
   formatSummary,
   neuterMentions,
+  resolveTriageLabels,
   sanitizeComment,
   sanitizeReportBody,
   validateReportTitle,
@@ -179,4 +180,20 @@ test('formatSummary shows dash for issues without priority labels', () => {
   assert.match(tableLines[0], /\| — \|/);
   assert.match(tableLines[0], /`needs clarification`/);
   assert.match(tableLines[0], /`ai-triage:needs-review`/);
+});
+
+test('formatSummary shows rationale column when present', () => {
+  const applied = [
+    { repo: 'rstudio/shiny', issue: '1', labels: ['Priority: Low'], confidence: 'high', rationale: 'This is a test rationale.' },
+  ];
+  const out = formatSummary(null, applied);
+  assert.match(out, /\| Issue \| Priority \| Labels \| Confidence \| Rationale \|/);
+  assert.match(out, /\| \[#1\].*?\| This is a test rationale\. \|/);
+});
+
+test('resolveTriageLabels applies done or needs-review based on confidence/labels', () => {
+  assert.deepEqual(resolveTriageLabels(['Priority: Low'], 'medium'), ['Priority: Low', 'ai-triage:done']);
+  assert.deepEqual(resolveTriageLabels(['Priority: Low', 'ai-triage:done'], 'high'), ['Priority: Low', 'ai-triage:done']);
+  assert.deepEqual(resolveTriageLabels(['Priority: Low', 'ai-triage:done'], 'low'), ['Priority: Low', 'ai-triage:needs-review']);
+  assert.deepEqual(resolveTriageLabels(['Priority: Low', 'ai-triage:needs-review', 'ai-triage:done'], 'medium'), ['Priority: Low', 'ai-triage:needs-review']);
 });

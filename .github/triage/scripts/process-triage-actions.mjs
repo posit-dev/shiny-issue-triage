@@ -94,6 +94,24 @@ export function buildComment(kind, sanitizedDetails) {
   return `${template.replace('{details}', sanitizedDetails)}\n\n_Posted by the Team Issue Triage workflow. A maintainer will follow up; please reply in this thread._`;
 }
 
+export function resolveTriageLabels(itemLabels, confidence) {
+  let labels = Array.isArray(itemLabels) ? itemLabels.map(String).filter(Boolean) : [];
+  const isLowConfidenceOrNeedsReview = confidence === 'low' || labels.includes('ai-triage:needs-review');
+
+  if (isLowConfidenceOrNeedsReview) {
+    if (!labels.includes('ai-triage:needs-review')) {
+      labels.push('ai-triage:needs-review');
+    }
+    labels = labels.filter((l) => l !== 'ai-triage:done');
+  } else {
+    if (!labels.includes('ai-triage:done')) {
+      labels.push('ai-triage:done');
+    }
+    labels = labels.filter((l) => l !== 'ai-triage:needs-review');
+  }
+  return labels;
+}
+
 export function sanitizeReportBody(raw) {
   const stripped = String(raw).replace(CONTROL_CHARS, '');
   if (stripped.length > LIMITS.report) {
@@ -237,8 +255,8 @@ export function formatSummary(claudeSummary, applied) {
   for (const [repo, entries] of byRepo) {
     lines.push(`### ${repo}`);
     lines.push('');
-    lines.push('| Issue | Priority | Labels | Confidence |');
-    lines.push('| --- | --- | --- | --- |');
+    lines.push('| Issue | Priority | Labels | Confidence | Rationale |');
+    lines.push('| --- | --- | --- | --- | --- |');
     for (const entry of entries) {
       const issueLink = `[#${entry.issue}](https://github.com/${repo}/issues/${entry.issue})`;
       const priorityLabel = entry.labels.find((l) => PRIORITY_BADGES.has(l));
@@ -251,7 +269,8 @@ export function formatSummary(claudeSummary, applied) {
         : entry.confidence === 'medium' ? '⚠️ medium'
         : entry.confidence === 'low' ? '❓ low'
         : entry.confidence;
-      lines.push(`| ${issueLink} | ${priority} | ${otherLabels} | ${confidence} |`);
+      const rationale = entry.rationale ? neuterMentions(entry.rationale.replace(/\s+/g, ' ').trim()) : '—';
+      lines.push(`| ${issueLink} | ${priority} | ${otherLabels} | ${confidence} | ${rationale} |`);
     }
     lines.push('');
   }
@@ -305,7 +324,7 @@ function main() {
       perRepoCounts.set(repo, next);
     }
 
-    const labels = Array.isArray(item.labels) ? item.labels.map(String).filter(Boolean) : [];
+    const labels = resolveTriageLabels(item.labels, String(item.confidence || ''));
     if (labels.length > LIMITS.labelsPerItem) {
       fail(`Too many labels for one item: ${labels.length} > ${LIMITS.labelsPerItem}`);
     }
@@ -324,6 +343,7 @@ function main() {
       issue: issueNumber,
       labels,
       confidence: String(item.confidence || 'unknown'),
+      rationale: String(item.rationale || ''),
     });
   }
 

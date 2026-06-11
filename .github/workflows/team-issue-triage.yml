@@ -198,7 +198,8 @@ jobs:
             Decision rules:
             - Use only labels listed in `${{ env.TRIAGE_LABELS }}`. Never invent labels.
             - Assign exactly one priority label when confidence is medium or high.
-            - Add `ai-triage:needs-review` when confidence is low or when a decision is risky.
+            - Add `ai-triage:needs-review` when confidence is low or when a decision is risky (do not assign `ai-triage:done` in this case).
+            - Add `ai-triage:done` when confidence is medium or high and the decision is not risky.
             - Only label `regression` after evidence shows current or development behavior differs materially from an older released version.
             - Only label `duplicate` when you include a linked duplicate candidate and a short rationale.
             - Do not post comments or create issues. The workflow only applies labels; a human will handle follow-up communication.
