@@ -6,7 +6,7 @@
 
 **Architecture:** A Python package (`src/triage_hub/`) drives everything through the `gh` CLI (no new auth surface): GraphQL for issues/PRs ordered by `updatedAt` DESC with timestamp cursors, REST for repo-wide comment listing with `since` cursors. SQLite is the canonical mirror (WAL mode, idempotent upserts); snapshots are `VACUUM INTO` + zstd uploaded to a rolling `mirror-latest` release plus dated restore points. Analytics are pure functions over the mirror (bisect sweep over created/closed timestamps).
 
-**Tech Stack:** Python ≥3.11 via `uv` (hatchling build), stdlib `sqlite3` + `argparse` + `subprocess`, `pyyaml`, `zstandard`, `pytest` (also collects the existing `unittest` files), `gh` CLI, GitHub Actions CI.
+**Tech Stack:** Python ≥3.11 via `uv` (`uv_build` backend), stdlib `sqlite3` + `argparse` + `subprocess`, `pyyaml`, `zstandard`, `pytest` (also collects the existing `unittest` files), `gh` CLI, GitHub Actions CI.
 
 **Plan series:** This is Plan 1 of ~5 (mirror → analysis pipeline → review app → executor → steady-state/tiers). Deliberate P1 deviations from the spec, to be picked up later: the `embeddings` table ships with the analysis-pipeline plan (Plan 2); burndown *rendering* ships with the app plan (P1 exports the series as JSON); `cursors.json` export to the `triage-state` branch ships with the steady-state CI plan (cursors live in the `repos` table until then).
 
@@ -42,15 +42,14 @@ triage-hub = "triage_hub.cli:main"
 dev = ["pytest>=8.0"]
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/triage_hub"]
+requires = ["uv_build>=0.8,<2"]
+build-backend = "uv_build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 ```
+
+(`uv_build` is uv's native build backend; it expects the `src/triage_hub/` layout this plan uses, with the module name derived from the project name. If `uv sync` reports the installed uv is too old for the pinned range, widen the `requires` pin to match `uv --version`.)
 
 - [ ] **Step 2: Create `src/triage_hub/__init__.py`**
 
@@ -148,14 +147,19 @@ def test_load_repos_rejects_malformed_entry(tmp_path):
         load_repos(cfg)
 
 
-def test_checked_in_config_is_loadable_and_unique():
+def test_checked_in_config_is_pilot_trio():
     repos = load_repos(REPO_ROOT / "config" / "repos.yaml")
 
     fulls = [r.full for r in repos]
     assert len(fulls) == len(set(fulls))
-    assert "rstudio/shiny" in fulls
-    assert "posit-dev/py-shiny" in fulls
-    assert len(fulls) >= 40
+    assert fulls == ["rstudio/promises", "rstudio/shinytest2",
+                     "posit-dev/py-shinylive"]
+
+
+def test_checked_in_config_keeps_fleet_ready_to_uncomment():
+    text = (REPO_ROOT / "config" / "repos.yaml").read_text(encoding="utf-8")
+    assert "# - rstudio/shiny\n" in text
+    assert "# - posit-dev/py-shiny\n" in text
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -166,58 +170,51 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'triage_hub.config'`
 - [ ] **Step 3: Create `config/repos.yaml`**
 
 ```yaml
-# Canonical repo scope for the triage hub (one tenant = one file like this).
-# R shinyverse comes from rstudio/shinycoreci R/data-shinyverse.R (2026-06-12);
-# Python ecosystem from posit-dev; plumber carried over from the prior
-# team-issue-triage allowlist. ropensci/plotly redirected to plotly/plotly.R —
-# confirm GitHub App installability on the plotly org before its blitz wave.
+# Repo scope for the triage hub (one tenant = one file like this).
+# Start small: the active entries below are the mirror pilot. Uncomment the
+# remaining repos when we're ready to run on the full shinyverse.
 repositories:
-  # R shinyverse (shinycoreci)
-  - rstudio/bsicons
-  - rstudio/bslib
-  - r-lib/cachem
-  - rstudio/chromote
-  - rstudio/crosstalk
-  - rstudio/DT
-  - rstudio/dygraphs
-  - r-lib/fastmap
-  - rstudio/flexdashboard
-  - rstudio/fontawesome
-  - rstudio/gt
-  - rstudio/htmltools
-  - ramnathv/htmlwidgets
-  - rstudio/httpuv
-  - r-lib/later
-  - rstudio/leaflet
-  - plotly/plotly.R
-  - rstudio/pool
   - rstudio/promises
-  - rstudio/reactlog
-  - rstudio/sass
-  - rstudio/shiny
-  - rstudio/shinycoreci
-  - schloerke/shinyjster
-  - rstudio/shinymeta
-  - rstudio/shinytest
   - rstudio/shinytest2
-  - rstudio/shinythemes
-  - rstudio/shinyvalidate
-  - rstudio/thematic
-  - rstudio/webdriver
-  - rstudio/websocket
-  # Adjacent R (prior allowlist)
-  - rstudio/plumber
-  # Python ecosystem
-  - posit-dev/py-shiny
-  - posit-dev/py-htmltools
-  - posit-dev/py-shinywidgets
   - posit-dev/py-shinylive
-  - posit-dev/shinylive
-  - posit-dev/chatlas
-  - posit-dev/shinychat
-  - posit-dev/querychat
-  - posit-dev/brand-yml
-  - posit-dev/great-tables
+  # - rstudio/bsicons
+  # - rstudio/bslib
+  # - r-lib/cachem
+  # - rstudio/chromote
+  # - rstudio/crosstalk
+  # - rstudio/DT
+  # - rstudio/dygraphs
+  # - r-lib/fastmap
+  # - rstudio/flexdashboard
+  # - rstudio/fontawesome
+  # - rstudio/htmltools
+  # - ramnathv/htmlwidgets
+  # - rstudio/httpuv
+  # - r-lib/later
+  # - rstudio/leaflet
+  # - rstudio/plumber
+  # - rstudio/pool
+  # - rstudio/reactlog
+  # - rstudio/sass
+  # - rstudio/shiny
+  # - rstudio/shinycoreci
+  # - schloerke/shinyjster
+  # - rstudio/shinymeta
+  # - rstudio/shinytest
+  # - rstudio/shinythemes
+  # - rstudio/shinyvalidate
+  # - rstudio/thematic
+  # - rstudio/webdriver
+  # - rstudio/websocket
+  # - posit-dev/py-shiny
+  # - posit-dev/py-htmltools
+  # - posit-dev/py-shinywidgets
+  # - posit-dev/shinylive
+  # - posit-dev/chatlas
+  # - posit-dev/shinychat
+  # - posit-dev/querychat
+  # - posit-dev/brand-yml
+  # - posit-dev/great-tables
 ```
 
 - [ ] **Step 4: Create `src/triage_hub/config.py`**
@@ -258,7 +255,7 @@ def load_repos(path: str | pathlib.Path) -> list[Repo]:
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `uv run pytest tests/triage_hub/test_config.py -v`
-Expected: PASS (3 tests)
+Expected: PASS (4 tests)
 
 - [ ] **Step 6: Commit**
 
@@ -1416,17 +1413,17 @@ Expected: PASS (3 tests)
 
 - [ ] **Step 6: Smoke-test against a real small repo (manual, requires `gh auth`)**
 
-Run: `uv run triage-hub sync --repo rstudio/reactlog --full`
+Run: `uv run triage-hub sync --repo rstudio/promises --full`
 Expected output shape (counts will vary):
 
 ```
-syncing rstudio/reactlog ...
-  done rstudio/reactlog
-synced 1 repos: ~60 issues, ~50 PRs, ~250 comments
+syncing rstudio/promises ...
+  done rstudio/promises
+synced 1 repos: ~150 issues, ~120 PRs, ~700 comments
 ```
 
 Then: `sqlite3 .data/mirror.sqlite "SELECT COUNT(*) FROM issues WHERE state='OPEN' AND is_pr=0"`
-Expected: a number close to 25 (compare with the repo's open-issue count on GitHub).
+Expected: a number close to 28 (compare with the repo's open-issue count on GitHub).
 
 - [ ] **Step 7: Commit**
 
@@ -2100,7 +2097,7 @@ derived data and can always be rebuilt.
 
 ```bash
 uv sync                                  # one-time setup
-uv run triage-hub sync --full            # initial backfill (hours; resumable)
+uv run triage-hub sync --full            # initial backfill (resumable)
 uv run triage-hub sync                   # incremental refresh (seconds-minutes)
 uv run triage-hub verify-counts          # reconcile against GitHub search
 uv run triage-hub analytics export       # burndown series -> .data/analytics.json
@@ -2136,7 +2133,7 @@ git commit -m "docs: add P1 mirror pipeline runbook"
 | Counts reconcile with GitHub search | `triage-hub verify-counts` (Task 11), exit code enforces it |
 | Snapshot bootstrap works on a clean machine | `triage-hub snapshot bootstrap` (Task 9) + runbook (Task 12) |
 | $0 model spend | No Anthropic calls anywhere in P1; `spend` table exists (Task 3) but stays empty |
-| Sync all 42 repos, open+closed, comments, PRs | Tasks 5–8 + `config/repos.yaml` (Task 2) |
+| Sync all configured repos, open+closed, comments, PRs | Tasks 5–8 + `config/repos.yaml` (Task 2). Pilot trio is active; the rest of the shinyverse ships commented out, activated by uncommenting when ready |
 | Burndown renders | Data + JSON export here (Task 10); rendering lands with the app plan |
 
-**Post-plan operator step (not a code task):** run `uv run triage-hub sync --full` for the real backfill, then `verify-counts`, then `snapshot publish --dated`. Expect the backfill to take a few hours across ~43 repos within GraphQL/REST rate budgets; it is resumable if interrupted.
+**Post-plan operator step (not a code task):** run `uv run triage-hub sync --full` for the real backfill, then `verify-counts`, then `snapshot publish --dated`. The pilot trio backfills in minutes; once the rest of the fleet is uncommented in `config/repos.yaml`, expect a few hours within GraphQL/REST rate budgets. Either way it is resumable if interrupted.
