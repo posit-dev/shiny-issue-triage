@@ -90,3 +90,32 @@ def test_gh_graphql_raises_on_errors(monkeypatch):
     )
     with pytest.raises(gh.GhError, match="boom"):
         gh.gh_graphql("query { n }", {})
+
+
+def test_run_gh_retries_and_eventually_succeeds(monkeypatch):
+    sleeps = []
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if len(calls) < 2:
+            return FakeProc(returncode=1, stderr="HTTP 503: Service Unavailable")
+        return FakeProc(stdout="ok")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    out = gh.run_gh(["api", "x"], sleep=sleeps.append)
+
+    assert out == "ok"
+    assert len(calls) == 2
+    assert sleeps == [30]
+
+
+def test_run_gh_wraps_missing_binary(monkeypatch):
+    def fake_run(cmd, **kwargs):
+        raise FileNotFoundError(2, "No such file or directory", "gh")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(gh.GhError, match="gh binary not found"):
+        gh.run_gh(["api", "x"])
