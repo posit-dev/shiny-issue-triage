@@ -1,0 +1,22 @@
+[project]
+name = "triage-hub"
+version = "0.1.0"
+description = "Shinyverse issue triage hub: mirror, analytics, and (later) triage pipeline"
+requires-python = ">=3.11"
+dependencies = [
+    "pyyaml>=6.0",
+    "zstandard>=0.22",
+]
+
+[project.scripts]
+triage-hub = "triage_hub.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["uv_build>=0.8,<2"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
