@@ -1,0 +1,45 @@
+# Repo scope for the triage hub (one tenant = one file like this).
+# Start small: the active entries below are the mirror pilot. Uncomment the
+# remaining repos when we're ready to run on the full shinyverse.
+repositories:
+  - rstudio/reactlog
+  - rstudio/shinytest2
+  - posit-dev/py-shinylive
+  # - rstudio/bsicons
+  # - rstudio/bslib
+  # - r-lib/cachem
+  # - rstudio/chromote
+  # - rstudio/crosstalk
+  # - rstudio/DT
+  # - rstudio/dygraphs
+  # - r-lib/fastmap
+  # - rstudio/flexdashboard
+  # - rstudio/fontawesome
+  # - rstudio/htmltools
+  # - ramnathv/htmlwidgets
+  # - rstudio/httpuv
+  # - r-lib/later
+  # - rstudio/leaflet
+  # - rstudio/plumber
+  # - rstudio/pool
+  # - rstudio/promises
+  # - rstudio/sass
+  # - rstudio/shiny
+  # - rstudio/shinycoreci
+  # - schloerke/shinyjster
+  # - rstudio/shinymeta
+  # - rstudio/shinytest
+  # - rstudio/shinythemes
+  # - rstudio/shinyvalidate
+  # - rstudio/thematic
+  # - rstudio/webdriver
+  # - rstudio/websocket
+  # - posit-dev/py-shiny
+  # - posit-dev/py-htmltools
+  # - posit-dev/py-shinywidgets
+  # - posit-dev/shinylive
+  # - posit-dev/chatlas
+  # - posit-dev/shinychat
+  # - posit-dev/querychat
+  # - posit-dev/brand-yml
+  # - posit-dev/great-tables
