@@ -98,3 +98,73 @@ def sync_issues(con: sqlite3.Connection, repo: str, *,
 
     return _walk_updated_desc(con, repo, "issues", ISSUES_QUERY, "issues",
                               upsert, graphql, full)
+
+
+PRS_QUERY = """
+query($owner: String!, $name: String!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(first: 50, orderBy: {field: UPDATED_AT, direction: DESC}, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        number title body state
+        author { login }
+        labels(first: 50) { nodes { name } }
+        assignees(first: 10) { nodes { login } }
+        milestone { title }
+        comments { totalCount }
+        createdAt updatedAt closedAt
+        merged mergedAt headRefName baseRefName
+        closingIssuesReferences(first: 10) { nodes { number } }
+      }
+    }
+  }
+}
+"""
+
+
+def parse_pr_node(repo: str, node: dict) -> tuple[dict, dict]:
+    author = node.get("author") or {}
+    milestone = node.get("milestone") or {}
+    issue_row = {
+        "repo": repo,
+        "number": node["number"],
+        "title": node["title"],
+        "body": node.get("body"),
+        "state": node["state"],
+        "state_reason": None,
+        "author": author.get("login"),
+        "labels_json": json.dumps(
+            [label["name"] for label in node["labels"]["nodes"]]),
+        "assignees_json": json.dumps(
+            [a["login"] for a in node["assignees"]["nodes"]]),
+        "milestone": milestone.get("title"),
+        "comment_count": node["comments"]["totalCount"],
+        "reaction_count": 0,
+        "is_pr": 1,
+        "created_at": node["createdAt"],
+        "updated_at": node["updatedAt"],
+        "closed_at": node.get("closedAt"),
+    }
+    pr_row = {
+        "repo": repo,
+        "number": node["number"],
+        "merged": 1 if node.get("merged") else 0,
+        "merged_at": node.get("mergedAt"),
+        "closing_issue_refs_json": json.dumps(
+            [n["number"] for n in node["closingIssuesReferences"]["nodes"]]),
+        "head_ref": node.get("headRefName"),
+        "base_ref": node.get("baseRefName"),
+    }
+    return issue_row, pr_row
+
+
+def sync_prs(con: sqlite3.Connection, repo: str, *,
+             graphql: Callable = gh_graphql, full: bool = False) -> int:
+    def upsert(con_: sqlite3.Connection, node: dict) -> int:
+        issue_row, pr_row = parse_pr_node(repo, node)
+        db.upsert_issue(con_, issue_row)
+        db.upsert_pr(con_, pr_row)
+        return 1
+
+    return _walk_updated_desc(con, repo, "prs", PRS_QUERY, "pullRequests",
+                              upsert, graphql, full)
