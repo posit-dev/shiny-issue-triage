@@ -152,7 +152,7 @@ def test_checked_in_config_is_pilot_trio():
 
     fulls = [r.full for r in repos]
     assert len(fulls) == len(set(fulls))
-    assert fulls == ["rstudio/promises", "rstudio/shinytest2",
+    assert fulls == ["rstudio/reactlog", "rstudio/shinytest2",
                      "posit-dev/py-shinylive"]
 
 
@@ -174,7 +174,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'triage_hub.config'`
 # Start small: the active entries below are the mirror pilot. Uncomment the
 # remaining repos when we're ready to run on the full shinyverse.
 repositories:
-  - rstudio/promises
+  - rstudio/reactlog
   - rstudio/shinytest2
   - posit-dev/py-shinylive
   # - rstudio/bsicons
@@ -194,7 +194,7 @@ repositories:
   # - rstudio/leaflet
   # - rstudio/plumber
   # - rstudio/pool
-  # - rstudio/reactlog
+  # - rstudio/promises
   # - rstudio/sass
   # - rstudio/shiny
   # - rstudio/shinycoreci
@@ -1413,17 +1413,17 @@ Expected: PASS (3 tests)
 
 - [ ] **Step 6: Smoke-test against a real small repo (manual, requires `gh auth`)**
 
-Run: `uv run triage-hub sync --repo rstudio/promises --full`
+Run: `uv run triage-hub sync --repo rstudio/reactlog --full`
 Expected output shape (counts will vary):
 
 ```
-syncing rstudio/promises ...
-  done rstudio/promises
-synced 1 repos: ~150 issues, ~120 PRs, ~700 comments
+syncing rstudio/reactlog ...
+  done rstudio/reactlog
+synced 1 repos: ~60 issues, ~50 PRs, ~250 comments
 ```
 
 Then: `sqlite3 .data/mirror.sqlite "SELECT COUNT(*) FROM issues WHERE state='OPEN' AND is_pr=0"`
-Expected: a number close to 28 (compare with the repo's open-issue count on GitHub).
+Expected: a number close to 25 (compare with the repo's open-issue count on GitHub).
 
 - [ ] **Step 7: Commit**
 

@@ -171,7 +171,7 @@ Everything tenant-specific lives in `config/`: `repos.yaml`, `labels.yaml`, `rub
 | Phase | Scope | Exit criteria |
 |---|---|---|
 | **P1 Mirror + analytics** | Sync all 42 repos (open+closed+comments+PRs), snapshot publishing, burndown renders in app | Counts reconcile with GitHub search; snapshot bootstrap works on a clean machine; $0 model spend |
-| **P2 Pilot** | reactlog (25), htmltools (82), promises (28): full loop — classify, dedup, queue, human review, execute real closes/labels | Every action type exercised on real issues; measured precision per category; cost within [cost-model](#8-cost-model--controls) estimates; golden set seeded |
+| **P2 Pilot** | reactlog (25), shinytest2 (59), py-shinylive (8) — same trio as the P1 mirror pilot: full loop — classify, dedup, queue, human review, execute real closes/labels | Every action type exercised on real issues; measured precision per category; cost within [cost-model](#8-cost-model--controls) estimates; golden set seeded |
 | **P3 Blitz waves** | Remaining repos small→large; shiny + plotly.R last | First-pass triage coverage 100% of open backlog; queue throughput sustained ≥200 decisions/week |
 | **P4 Steady state + first graduations** | 12h schedule on; first categories hit the [graduation bar](#6-review-queue-decisions-graduated-autonomy) | ≥1 category auto-applying with spot-audits; reopen rate <1% on executed closes |
 | **P5 PR tiers** | Tier 1 at scale; Tier 2 launches; PR triage rubric (stale/superseded community PRs; wshm's scoring dimensions — CI status, reviews, age, risk, conflicts — as reference material) | Draft-PR flow proven end-to-end; PR-triage proposals reviewed like issues |
