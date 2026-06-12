@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS spend (
 );
 CREATE INDEX IF NOT EXISTS idx_issues_updated ON issues(repo, updated_at);
 CREATE INDEX IF NOT EXISTS idx_comments_issue ON comments(repo, issue_number);
+CREATE INDEX IF NOT EXISTS idx_spend_run ON spend(run_id);
 """
 
 ISSUE_COLUMNS = (
@@ -128,9 +129,11 @@ def get_cursor(con: sqlite3.Connection, repo: str, kind: str) -> str | None:
 
 def set_cursor(con: sqlite3.Connection, repo: str, kind: str, value: str) -> None:
     column = _CURSOR_KINDS[kind]
-    con.execute("INSERT INTO repos (repo) VALUES (?) ON CONFLICT (repo) DO NOTHING",
-                (repo,))
-    con.execute(f"UPDATE repos SET {column}=? WHERE repo=?", (value, repo))
+    con.execute(
+        f"INSERT INTO repos (repo, {column}) VALUES (?, ?) "
+        f"ON CONFLICT (repo) DO UPDATE SET {column}=excluded.{column}",
+        (repo, value),
+    )
 
 
 def _now() -> str:
@@ -138,6 +141,11 @@ def _now() -> str:
 
 
 def start_run(con: sqlite3.Connection, kind: str) -> str:
+    """Insert a run record and commit.
+
+    Call BEFORE any upserts on this connection: this commit flushes any
+    open transaction.
+    """
     run_id = uuid.uuid4().hex
     con.execute("INSERT INTO runs (run_id, kind, started_at) VALUES (?, ?, ?)",
                 (run_id, kind, _now()))
@@ -146,6 +154,10 @@ def start_run(con: sqlite3.Connection, kind: str) -> str:
 
 
 def finish_run(con: sqlite3.Connection, run_id: str, summary: dict) -> None:
+    """Update the run record and commit.
+
+    This commit also flushes any uncommitted upserts on this connection.
+    """
     con.execute("UPDATE runs SET finished_at=?, summary_json=? WHERE run_id=?",
                 (_now(), json.dumps(summary), run_id))
     con.commit()

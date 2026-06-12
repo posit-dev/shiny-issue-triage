@@ -74,6 +74,9 @@ def test_cursors_roundtrip(tmp_path):
     db.set_cursor(con, "rstudio/shiny", "comments", "2026-06-02T00:00:00Z")
     assert db.get_cursor(con, "rstudio/shiny", "issues") == "2026-06-01T00:00:00Z"
     assert db.get_cursor(con, "rstudio/shiny", "comments") == "2026-06-02T00:00:00Z"
+    db.set_cursor(con, "rstudio/shiny", "issues", "2026-06-03T00:00:00Z")
+    assert db.get_cursor(con, "rstudio/shiny", "issues") == "2026-06-03T00:00:00Z"
+    assert con.execute("SELECT COUNT(*) FROM repos").fetchone()[0] == 1
 
 
 def test_record_run(tmp_path):
