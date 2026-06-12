@@ -88,3 +88,28 @@ def test_incremental_sync_stops_at_cursor(tmp_path):
     numbers = {r["number"] for r in con.execute("SELECT number FROM issues")}
     assert numbers == {2, 3}
     assert db.get_cursor(con, "rstudio/shiny", "issues") == "2026-06-03T00:00:00Z"
+
+
+def test_empty_repo_sets_no_cursor(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+
+    count = sync_issues(con, "rstudio/shiny",
+                        graphql=lambda q, v: _page([]), full=True)
+
+    assert count == 0
+    assert con.execute("SELECT COUNT(*) FROM issues").fetchone()[0] == 0
+    assert db.get_cursor(con, "rstudio/shiny", "issues") is None
+
+
+def test_full_sync_ignores_existing_cursor(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+    db.set_cursor(con, "rstudio/shiny", "issues", "2026-06-02T12:00:00Z")
+
+    count = sync_issues(con, "rstudio/shiny",
+                        graphql=lambda q, v: _page([
+                            _node(3, "2026-06-03T00:00:00Z"),
+                            _node(1, "2026-06-01T00:00:00Z"),
+                        ]), full=True)
+
+    assert count == 2
+    assert db.get_cursor(con, "rstudio/shiny", "issues") == "2026-06-03T00:00:00Z"

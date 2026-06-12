@@ -48,7 +48,7 @@ def parse_issue_node(repo: str, node: dict) -> dict:
         "state_reason": node.get("stateReason"),
         "author": author.get("login"),
         "labels_json": json.dumps(
-            [l["name"] for l in node["labels"]["nodes"]]),
+            [label["name"] for label in node["labels"]["nodes"]]),
         "assignees_json": json.dumps(
             [a["login"] for a in node["assignees"]["nodes"]]),
         "milestone": milestone.get("title"),
