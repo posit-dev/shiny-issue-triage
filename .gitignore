@@ -2,3 +2,7 @@
 .data/
 *.sqlite
 *.sqlite.zst
+
+dist/
+.venv/
+.pytest_cache/
