@@ -32,7 +32,7 @@ The shinyverse (the 32 R packages tracked by `rstudio/shinycoreci` plus the Pyth
 | **GitHub is the source of truth**; the hub owns a derived working copy | Labels/close-states/timelines stay community-visible and survive tooling changes. The mirror is rebuildable from GitHub at any time, so it can never be "lost," only stale — and writes never depend on mirror freshness (see §4 freshness contract). |
 | **No GitHub Projects** as state store or analytics engine | Projects Insights charts are UI-only (no API/export — confirmed 2026-06). Item-limit is no longer a blocker (50k since Feb 2025), but Projects would be a second source of truth maintained via rate-limited GraphQL mutations, returning analytics we can compute better ourselves from issue timestamps — retroactively, for all history. A read-only stakeholder Project view may be added later; it is never authoritative. |
 | **No `gh aw`** as foundation | Technical preview; retired releases 0.68.4–0.71.3 over a billing bug (2026-04); would push per-repo workflow sprawl across 42 repos. Its safe-outputs concept is already implemented in this repo (`process-triage-actions.mjs` + allowlisted labels). Re-evaluate ~2026-12. |
-| **No `wshm`** (or similar third-party agents) | 12 weeks old, 2 contributors, 61 stars, `NOASSERTION` license; would require write tokens to flagship Posit repos plus the enterprise API key. Risk out of proportion to time saved. |
+| **No `wshm`** (or similar third-party agents) — but adopted as a reference implementation | Evaluated twice, including a fork-and-build option. 12 weeks old, 2 contributors, 61 stars; ~30k lines of Rust by 2 authors = a permanent audit/maintenance obligation outside the team's languages. License is SSPL-1.0: internal use is fine, but SSPL §3 conflicts with this program's "open it up" end-state, and a fork can never be re-licensed. Running the free binary would also hand it the enterprise API key + GitHub write tokens. Decision: read it, don't run it — three ideas lifted into this spec (executor `undo`, apply-requires-flag default, PR scoring rubric for P5). |
 | **Centralized, batched model calls** — never per-GitHub-event agent runs | Cost scales with issues we choose to process, not with event traffic. Batch API = 50% off; prompt caching for the shared rubric prefix. |
 | **Single human gate now (Barret), graduated autonomy later** | Every public mutation is human-approved in v1. Decision logs accumulate per-category precision; a category graduates to auto-apply when it sustains the precision bar (§6). |
 | **Mirror includes closed issues, all comments, and PRs** | Dedup must match against fixed/closed issues; burndown backfill needs `closedAt`; `closingIssuesReferences` powers "already fixed?" checks. Closed issues are indexed/analyzed but **never batch-classified** (no action to take), so model spend is unchanged. |
@@ -116,7 +116,9 @@ Prompt = shared cached prefix (the existing `issue-triage-rubric.md` + label tax
 
 ## 7. Executor & escalation tiers
 
-**Executor** (evolves `process-triage-actions.mjs` + `gh-token-router.mjs`): reads approved decisions → freshness check (§4) → applies via `gh` using the per-installation GitHub App token map (existing): `label add/remove`, `comment` (from approved templates only), `close --reason {completed|not-planned}`, `close --duplicate-of N`, `reopen`. Appends results to `results/YYYY/Www.jsonl`; updates the mirror row. Has `--dry-run` (prints mutations, applies nothing). Mutation pacing ~1/sec.
+**Executor** (evolves `process-triage-actions.mjs` + `gh-token-router.mjs`): reads approved decisions → freshness check (§4) → applies via `gh` using the per-installation GitHub App token map (existing): `label add/remove`, `comment` (from approved templates only), `close --reason {completed|not-planned}`, `close --duplicate-of N`, `reopen`. **Dry-run is the default; mutations require an explicit `--apply` flag.** Appends results to `results/YYYY/Www.jsonl` — including created comment IDs and prior label/state per issue — and updates the mirror row. Mutation pacing ~1/sec.
+
+**Undo (lifted from `wshm revert`):** every executed batch gets a batch id, and result records capture enough to reverse each mutation (label add↔remove, close↔reopen, comment→delete by recorded comment id). `undo --batch <id>` reverses a whole batch (or `--issue` for one item); undo actions are themselves logged to results. Issue *transfers* are not cleanly reversible — they are excluded from the undo guarantee and therefore require an extra confirmation step in the review app if ever enabled.
 
 **Comment templates** (in `config/templates/`): polite, evidence-linked, state that a maintainer approved the action, and invite reopening. No free-text model output is ever posted in v1.
 
@@ -158,7 +160,7 @@ Everything tenant-specific lives in `config/`: `repos.yaml`, `labels.yaml`, `rub
 - **Sync:** recorded-fixture tests (GraphQL responses → expected rows), cursor resume, upsert idempotency.
 - **Classification:** golden-set regression — a sample of real issues with human-verified expected outputs, run on prompt/model changes; the pilot's human decisions seed this set.
 - **Dedup:** known-duplicate pairs from historical closes (`duplicate` close reason) as recall tests.
-- **Executor:** `--dry-run` snapshot tests; explicit freshness-conflict test (mutate fixture issue between proposal and execution → expect bounce).
+- **Executor:** dry-run snapshot tests; explicit freshness-conflict test (mutate fixture issue between proposal and execution → expect bounce); undo round-trip test (execute fixture batch → undo → original labels/state/comments restored).
 - **Apps:** py-shiny test fixtures for server logic; Playwright smoke test for the queue flow.
 - Existing pytest + `node:test` setups extend; CI runs all of the above without network (fixtures only).
 
@@ -170,7 +172,7 @@ Everything tenant-specific lives in `config/`: `repos.yaml`, `labels.yaml`, `rub
 | **P2 Pilot** | reactlog (25), htmltools (82), promises (28): full loop — classify, dedup, queue, human review, execute real closes/labels | Every action type exercised on real issues; measured precision per category; cost within §8 estimates; golden set seeded |
 | **P3 Blitz waves** | Remaining repos small→large; shiny + plotly.R last | First-pass triage coverage 100% of open backlog; queue throughput sustained ≥200 decisions/week |
 | **P4 Steady state + first graduations** | 12h schedule on; first categories hit the §6 bar | ≥1 category auto-applying with spot-audits; reopen rate <1% on executed closes |
-| **P5 PR tiers** | Tier 1 at scale; Tier 2 launches; PR triage rubric (stale/superseded community PRs) | Draft-PR flow proven end-to-end; PR-triage proposals reviewed like issues |
+| **P5 PR tiers** | Tier 1 at scale; Tier 2 launches; PR triage rubric (stale/superseded community PRs; wshm's scoring dimensions — CI status, reviews, age, risk, conflicts — as reference material) | Draft-PR flow proven end-to-end; PR-triage proposals reviewed like issues |
 | **P6 Open it up** | Template repo, docs, public dashboard | Second team adopts without hub-team code changes |
 
 Note for P3: `ropensci/plotly` now lives at `plotly/plotly.R` — confirm GitHub App installability on the `plotly` org before its wave; if not installable, it drops from scope (config change, not code).
@@ -179,7 +181,7 @@ Note for P3: `ropensci/plotly` now lives at `plotly/plotly.R` — confirm GitHub
 
 | Risk | Mitigation |
 |---|---|
-| Mass-closing damages community trust | Single human gate in v1; polite evidence-linked templates; proper close reasons; reopens tracked as failures; graduated autonomy only after sustained precision |
+| Mass-closing damages community trust | Single human gate in v1; polite evidence-linked templates; proper close reasons; reopens tracked as failures; graduated autonomy only after sustained precision; batch `undo` can reverse any executed decision set (§7) |
 | Prompt injection via issue content | Schema-constrained outputs; allowlisted mutations/labels; agents emit proposals only (§5.4) |
 | Spend runaway | Batch-only bulk stages; tier caps; `max_usd_per_day` circuit breaker; spend dashboard |
 | `shinyreact` is pre-release | Pin commit + vendor wheel; app is internal-only in v1 |
