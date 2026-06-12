@@ -1968,8 +1968,9 @@ def test_verify_counts_reports_match_and_mismatch(tmp_path):
     github_counts = {"rstudio/shiny": 10, "rstudio/bslib": 9}
 
     def fake_api(args):
+        assert args[0] == "api"
         for repo, total in github_counts.items():
-            if f"repo:{repo}" in args[0]:
+            if f"repo:{repo}" in args[1]:
                 return {"total_count": total}
         raise AssertionError(f"unexpected call: {args}")
 
@@ -2019,7 +2020,7 @@ def verify_counts(con: sqlite3.Connection, repos: list[str], *,
         mirror = con.execute(
             "SELECT COUNT(*) FROM issues"
             " WHERE repo=? AND state='OPEN' AND is_pr=0", (repo,)).fetchone()[0]
-        data = api([f"search/issues?q=repo:{repo}+type:issue+state:open"
+        data = api(["api", f"search/issues?q=repo:{repo}+type:issue+state:open"
                     f"&per_page=1"])
         github = data["total_count"]
         results.append({
