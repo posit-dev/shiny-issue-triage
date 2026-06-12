@@ -27,8 +27,9 @@ def test_sync_comments_pages_until_short_page(tmp_path):
     calls = []
 
     def fake_api(args):
-        calls.append(args[0])
-        return page1 if "&page=1" in args[0] else page2
+        assert args[0] == "api"
+        calls.append(args[1])
+        return page1 if "&page=1" in args[1] else page2
 
     count = sync_comments(con, "rstudio/shiny", api=fake_api, full=True)
 
@@ -44,7 +45,7 @@ def test_incremental_sync_passes_since(tmp_path):
     seen = []
 
     def fake_api(args):
-        seen.append(args[0])
+        seen.append(args[1])
         return []
 
     sync_comments(con, "rstudio/shiny", api=fake_api)
@@ -68,3 +69,16 @@ def test_comment_on_old_issue_is_recaptured(tmp_path):
         "SELECT * FROM comments WHERE issue_number=50").fetchone()
     assert row["body"] == "still broken!"
     assert db.get_cursor(con, "rstudio/shiny", "comments") == "2026-06-10T00:00:00Z"
+
+
+def test_edited_comment_is_upserted_not_duplicated(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+    original = _item(7, 1, "2026-06-01T00:00:00Z", body="first")
+    sync_comments(con, "rstudio/shiny", api=lambda args: [original], full=True)
+
+    edited = _item(7, 1, "2026-06-02T00:00:00Z", body="edited")
+    sync_comments(con, "rstudio/shiny", api=lambda args: [edited])
+
+    rows = con.execute("SELECT body FROM comments").fetchall()
+    assert [r["body"] for r in rows] == ["edited"]
+    assert db.get_cursor(con, "rstudio/shiny", "comments") == "2026-06-02T00:00:00Z"

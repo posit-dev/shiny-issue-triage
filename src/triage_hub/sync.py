@@ -13,7 +13,7 @@ import sqlite3
 from typing import Callable
 
 from . import db
-from .gh import gh_graphql
+from .gh import gh_graphql, gh_json
 
 ISSUES_QUERY = """
 query($owner: String!, $name: String!, $after: String) {
@@ -188,7 +188,6 @@ def sync_comments(con: sqlite3.Connection, repo: str, *,
                   api: Callable = None, full: bool = False) -> int:
     """Repo-wide issue-comment listing (covers issue and PR discussion
     threads; PR diff-review comments are out of scope for the mirror)."""
-    from .gh import gh_json
     if api is None:
         api = gh_json
     cursor = None if full else db.get_cursor(con, repo, "comments")
@@ -200,7 +199,7 @@ def sync_comments(con: sqlite3.Connection, repo: str, *,
         path = (f"repos/{repo}/issues/comments"
                 f"?sort=updated&direction=asc&per_page=100"
                 f"&since={since}&page={page}")
-        items = api([path]) or []
+        items = api(["api", path]) or []
         for item in items:
             row = parse_comment(repo, item)
             db.upsert_comment(con, row)
