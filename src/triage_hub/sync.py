@@ -168,3 +168,49 @@ def sync_prs(con: sqlite3.Connection, repo: str, *,
 
     return _walk_updated_desc(con, repo, "prs", PRS_QUERY, "pullRequests",
                               upsert, graphql, full)
+
+
+def parse_comment(repo: str, item: dict) -> dict:
+    user = item.get("user") or {}
+    issue_number = int(item["issue_url"].rstrip("/").rsplit("/", 1)[1])
+    return {
+        "repo": repo,
+        "issue_number": issue_number,
+        "comment_id": item["id"],
+        "author": user.get("login"),
+        "body": item.get("body"),
+        "created_at": item["created_at"],
+        "updated_at": item["updated_at"],
+    }
+
+
+def sync_comments(con: sqlite3.Connection, repo: str, *,
+                  api: Callable = None, full: bool = False) -> int:
+    """Repo-wide issue-comment listing (covers issue and PR discussion
+    threads; PR diff-review comments are out of scope for the mirror)."""
+    from .gh import gh_json
+    if api is None:
+        api = gh_json
+    cursor = None if full else db.get_cursor(con, repo, "comments")
+    since = cursor or "1970-01-01T00:00:00Z"
+    newest = cursor
+    count = 0
+    page = 1
+    while True:
+        path = (f"repos/{repo}/issues/comments"
+                f"?sort=updated&direction=asc&per_page=100"
+                f"&since={since}&page={page}")
+        items = api([path]) or []
+        for item in items:
+            row = parse_comment(repo, item)
+            db.upsert_comment(con, row)
+            count += 1
+            if newest is None or row["updated_at"] > newest:
+                newest = row["updated_at"]
+        if len(items) < 100:
+            break
+        page += 1
+    if newest is not None:
+        db.set_cursor(con, repo, "comments", newest)
+    con.commit()
+    return count
