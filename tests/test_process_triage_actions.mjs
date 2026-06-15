@@ -159,15 +159,13 @@ test('formatSummary renders confidence indicators', () => {
   assert.match(out, /❓ low/);
 });
 
-test('formatSummary wraps Claude summary in collapsible details', () => {
+test('formatSummary includes Claude summary in a clean header section', () => {
   const applied = [
     { repo: 'rstudio/shiny', issue: '1', labels: ['Priority: Low'], confidence: 'high' },
   ];
   const out = formatSummary('A detailed summary.', applied);
-  assert.match(out, /<details>/);
-  assert.match(out, /<summary>Claude summary<\/summary>/);
+  assert.match(out, /## Triage Summary/);
   assert.match(out, /A detailed summary\./);
-  assert.match(out, /<\/details>/);
 });
 
 test('formatSummary shows dash for issues without priority labels', () => {

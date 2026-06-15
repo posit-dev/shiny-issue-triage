@@ -37,6 +37,7 @@ env:
 
 engine:
   id: claude
+  model: sonnet-4-6
   permission-mode: auto
   env:
     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

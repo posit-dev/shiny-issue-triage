@@ -30,7 +30,7 @@ env:
   TRIAGE_LABELS: .github/triage/labels.yaml
   TRIAGE_RUBRIC: .github/triage/issue-triage-rubric.md
   TRIAGE_STATE_DIR: .triage-state
-  ANTHROPIC_MODEL: ${{ vars['ANTHROPIC_MODEL'] || 'sonnet' }}
+  ANTHROPIC_MODEL: sonnet-4-6
 
 jobs:
   triage:

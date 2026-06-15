@@ -102,12 +102,9 @@ export function formatDryRunSummary(agentSummary, planned) {
   lines.push('');
 
   if (agentSummary) {
-    lines.push('<details>');
-    lines.push('<summary>Claude summary</summary>');
+    lines.push('## Triage Summary');
     lines.push('');
     lines.push(neuterMentions(agentSummary));
-    lines.push('');
-    lines.push('</details>');
     lines.push('');
   }
 
