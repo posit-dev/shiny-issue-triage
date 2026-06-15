@@ -3,14 +3,13 @@ import test from 'node:test';
 
 import {
   extractTriageOutput,
-  extractTriageToolItem,
 } from '../.github/triage/scripts/gh-aw-output-adapter.mjs';
 
 test('extractTriageOutput converts a gh-aw safe-output item to Claude output', () => {
   const raw = JSON.stringify({
     items: [
       {
-        type: 'apply_triage_actions',
+        type: 'summarize_triage_dry_run',
         summary: 'Triaged one issue.',
         actions_json: JSON.stringify([
           {
@@ -45,7 +44,7 @@ test('extractTriageOutput accepts an actions object wrapper', () => {
   const raw = JSON.stringify({
     items: [
       {
-        type: 'apply_triage_actions',
+        type: 'summarize_triage_dry_run',
         summary: 'Nothing to do.',
         actions_json: JSON.stringify({ actions: [] }),
       },
@@ -58,18 +57,18 @@ test('extractTriageOutput accepts an actions object wrapper', () => {
   });
 });
 
-test('extractTriageOutput rejects missing apply_triage_actions items', () => {
+test('extractTriageOutput rejects missing summarize_triage_dry_run items', () => {
   assert.throws(
     () => extractTriageOutput(JSON.stringify({ items: [{ type: 'noop', message: 'done' }] })),
-    /must call apply_triage_actions exactly once/,
+    /must call summarize_triage_dry_run exactly once/,
   );
 });
 
-test('extractTriageOutput rejects multiple apply_triage_actions items', () => {
+test('extractTriageOutput rejects multiple summarize_triage_dry_run items', () => {
   const raw = JSON.stringify({
     items: [
-      { type: 'apply_triage_actions', actions_json: '[]' },
-      { type: 'apply_triage_actions', actions_json: '[]' },
+      { type: 'summarize_triage_dry_run', actions_json: '[]' },
+      { type: 'summarize_triage_dry_run', actions_json: '[]' },
     ],
   });
 
@@ -78,27 +77,8 @@ test('extractTriageOutput rejects multiple apply_triage_actions items', () => {
 
 test('extractTriageOutput rejects non-array actions_json', () => {
   const raw = JSON.stringify({
-    items: [{ type: 'apply_triage_actions', actions_json: JSON.stringify({ summary: 'bad' }) }],
+    items: [{ type: 'summarize_triage_dry_run', actions_json: JSON.stringify({ summary: 'bad' }) }],
   });
 
   assert.throws(() => extractTriageOutput(raw), /actions_json must be a JSON array/);
-});
-
-test('extractTriageToolItem returns optional cursor updates', () => {
-  const raw = JSON.stringify({
-    items: [
-      {
-        type: 'apply_triage_actions',
-        summary: 'Triaged one issue.',
-        actions_json: '[]',
-        cursors_json: JSON.stringify({
-          'rstudio/shiny': { updatedAt: '2026-06-15T12:00:00Z' },
-        }),
-      },
-    ],
-  });
-
-  assert.deepEqual(extractTriageToolItem(raw).cursors, {
-    'rstudio/shiny': { updatedAt: '2026-06-15T12:00:00Z' },
-  });
 });

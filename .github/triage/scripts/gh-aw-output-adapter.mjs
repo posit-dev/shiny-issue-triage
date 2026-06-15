@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-const TOOL_TYPE = 'apply_triage_actions';
+const TOOL_TYPE = 'summarize_triage_dry_run';
 
 export function extractTriageOutput(raw) {
   const item = extractTriageToolItem(raw);
@@ -30,15 +30,9 @@ export function extractTriageToolItem(raw) {
     throw new Error('actions_json must be a JSON array or an object with an actions array.');
   }
 
-  const cursors = item.cursors_json ? parseJson(item.cursors_json, 'cursors_json') : {};
-  if (!cursors || Array.isArray(cursors) || typeof cursors !== 'object') {
-    throw new Error('cursors_json must be a JSON object.');
-  }
-
   return {
     summary: String(item.summary || ''),
     actions,
-    cursors,
   };
 }
 
