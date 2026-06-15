@@ -62,5 +62,7 @@ jobs:
         run: |
           node --check .github/triage/scripts/create-github-app-token-map.mjs
           node --check .github/triage/scripts/gh-token-router.mjs
+          node --check .github/triage/scripts/gh-aw-output-adapter.mjs
+          node --check .github/triage/scripts/persist-gh-aw-triage-state.mjs
           node --check .github/triage/scripts/process-triage-actions.mjs
-          node --test tests/test_process_triage_actions.mjs tests/test_gh_token_router.mjs
+          node --test tests/test_process_triage_actions.mjs tests/test_gh_token_router.mjs tests/test_gh_aw_output_adapter.mjs tests/test_persist_gh_aw_triage_state.mjs
