@@ -148,10 +148,17 @@ safe-outputs:
 
         - name: Validate and summarize triage dry run
           env:
+            GH_AW_AGENT_OUTPUT: ${{ runner.temp }}/gh-aw/safe-jobs/agent_output.json
             TRIAGE_ALLOWED_REPOS: ${{ steps.repos.outputs.owner_repos }}
             TRIAGE_ALLOWED_LABELS: ${{ steps.managed-labels.outputs.allowed_labels }}
             TRIAGE_MAX_ISSUES_PER_REPO: ${{ steps.repos.outputs.max_issues_per_repo }}
           run: node .github/triage/scripts/dry-run-triage-actions.mjs
+
+        - name: Append Anthropic token usage summary
+          env:
+            GH_AW_ARTIFACT_ROOT: ${{ runner.temp }}/gh-aw/safe-jobs/
+            GH_AW_USAGE_PROVIDER: anthropic
+          run: node .github/triage/scripts/append-gh-aw-token-usage-summary.mjs
 
 ---
 
@@ -199,7 +206,7 @@ Durable state is checked out at `${{ env.TRIAGE_STATE_DIR }}` from the `triage-s
 
 ## Required Safe Output
 
-Call `summarize_triage_dry_run` exactly once, even when no action is needed. The safe-output job validates the proposed actions and writes a comparison summary to the GitHub Actions run summary. It does not apply labels.
+Call `summarize_triage_dry_run` exactly once, even when no action is needed. The safe-output job validates the proposed actions, writes a comparison summary to the GitHub Actions run summary, and appends Anthropic token usage parsed from the gh-aw agent artifact. It does not apply labels.
 
 Use:
 

@@ -61,8 +61,9 @@ jobs:
       - name: Run Node checks
         run: |
           node --check .github/triage/scripts/create-github-app-token-map.mjs
+          node --check .github/triage/scripts/append-gh-aw-token-usage-summary.mjs
           node --check .github/triage/scripts/gh-token-router.mjs
           node --check .github/triage/scripts/gh-aw-output-adapter.mjs
           node --check .github/triage/scripts/dry-run-triage-actions.mjs
           node --check .github/triage/scripts/process-triage-actions.mjs
-          node --test tests/test_process_triage_actions.mjs tests/test_gh_token_router.mjs tests/test_gh_aw_output_adapter.mjs tests/test_dry_run_triage_actions.mjs
+          node --test tests/test_process_triage_actions.mjs tests/test_gh_token_router.mjs tests/test_gh_aw_output_adapter.mjs tests/test_dry_run_triage_actions.mjs tests/test_append_gh_aw_token_usage_summary.mjs

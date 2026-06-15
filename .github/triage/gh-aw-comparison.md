@@ -7,6 +7,7 @@ This branch adds `.github/workflows/team-issue-triage-gh-aw.md`, a GitHub Agenti
 - The existing workflow uses `anthropics/claude-code-action` with `CLAUDE_CODE_OAUTH_TOKEN`.
 - The gh-aw workflow uses `engine: claude` with the `ANTHROPIC_API_KEY` Actions secret.
 - The agent job stays read-only. The custom `summarize_triage_dry_run` safe-output job validates proposed label actions and publishes a GitHub Actions summary, but does not apply labels.
+- The run summary now appends Anthropic token usage parsed from gh-aw's token usage artifact, so reviewers can compare proposed triage output and model consumption in one place.
 - The same triage config, label taxonomy, rubric, label allowlist validator, and read-only `triage-state` context are reused.
 - The gh-aw workflow is manual-dispatch only, requires `confirm_dry_run=true`, and is named `Team Issue Triage (gh-aw Claude Manual Dry Run)` so the team can compare it without creating a second scheduled triage run.
 
