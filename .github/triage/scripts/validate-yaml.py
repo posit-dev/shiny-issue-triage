@@ -11,6 +11,7 @@ import yaml
 def main() -> None:
     paths = [
         Path('.github/workflows/team-issue-triage.yml'),
+        Path('.github/workflows/team-issue-triage-gh-aw.lock.yml'),
         Path('.github/workflows/ci.yml'),
         Path('.github/triage/team-issue-triage.yaml'),
         Path('.github/triage/labels.yaml'),
