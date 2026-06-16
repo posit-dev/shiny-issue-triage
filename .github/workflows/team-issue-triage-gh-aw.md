@@ -41,6 +41,7 @@ engine:
   permission-mode: auto
   env:
     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    GH_AW_MODEL_AGENT_CLAUDE: sonnet-4-6
 
 max-turns: 100
 timeout-minutes: 60
