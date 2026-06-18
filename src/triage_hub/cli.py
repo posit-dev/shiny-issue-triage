@@ -59,11 +59,13 @@ def _cmd_analytics_export(args: argparse.Namespace) -> int:
 def _cmd_verify_counts(args: argparse.Namespace) -> int:
     repos = [r.full for r in config.load_repos(args.config)]
     con = _open_db(args.db)
-    results = verify_mod.verify_counts(con, repos)
+    results = verify_mod.verify_counts(con, repos, tolerance=args.tolerance)
     bad = [r for r in results if not r["ok"]]
     for r in results:
         flag = "OK " if r["ok"] else "MISMATCH"
-        print(f"{flag} {r['repo']}: mirror={r['mirror']} github={r['github']}")
+        diff = r["github"] - r["mirror"]
+        print(f"{flag} {r['repo']}: mirror={r['mirror']} "
+              f"github={r['github']} diff={diff:+d}")
     print(f"{len(results) - len(bad)}/{len(results)} repos reconcile")
     return 1 if bad else 0
 
@@ -105,6 +107,8 @@ def build_parser() -> argparse.ArgumentParser:
                            help="reconcile mirror vs GitHub open-issue counts")
     p_ver.add_argument("--db", default=DEFAULT_DB)
     p_ver.add_argument("--config", default=DEFAULT_CONFIG)
+    p_ver.add_argument("--tolerance", type=int, default=2,
+                       help="max mirror-vs-github drift treated as OK")
     p_ver.set_defaults(func=_cmd_verify_counts)
 
     return parser

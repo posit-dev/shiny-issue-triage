@@ -42,3 +42,37 @@ def test_small_drift_within_tolerance_is_ok(tmp_path):
         api=lambda args: {"total_count": 11}, tolerance=2)
 
     assert results[0]["ok"] is True
+
+
+def test_tolerance_boundary_is_inclusive(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+    _seed_open(con, "rstudio/shiny", 10)
+
+    # diff == tolerance exactly -> ok; diff > tolerance -> not ok
+    at_bound = verify.verify_counts(
+        con, ["rstudio/shiny"],
+        api=lambda args: {"total_count": 12}, tolerance=2)
+    over_bound = verify.verify_counts(
+        con, ["rstudio/shiny"],
+        api=lambda args: {"total_count": 13}, tolerance=2)
+
+    assert at_bound[0]["ok"] is True
+    assert over_bound[0]["ok"] is False
+
+
+def test_prs_are_not_counted_on_mirror_side(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+    _seed_open(con, "rstudio/shiny", 3)
+    # An open PR row must NOT inflate the mirror open-issue count.
+    con.execute(
+        "INSERT INTO issues (repo, number, title, state, is_pr,"
+        " created_at, updated_at) VALUES ('rstudio/shiny', 999, 'pr', 'OPEN', 1,"
+        " '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+    con.commit()
+
+    results = verify.verify_counts(
+        con, ["rstudio/shiny"],
+        api=lambda args: {"total_count": 3}, tolerance=0)
+
+    assert results[0]["mirror"] == 3
+    assert results[0]["ok"] is True

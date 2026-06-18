@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Callable
 
-from .gh import gh_json
+from .gh import GhError, gh_json
 
 
 def verify_counts(con: sqlite3.Connection, repos: list[str], *,
@@ -17,6 +17,8 @@ def verify_counts(con: sqlite3.Connection, repos: list[str], *,
             " WHERE repo=? AND state='OPEN' AND is_pr=0", (repo,)).fetchone()[0]
         data = api(["api", f"search/issues?q=repo:{repo}+type:issue+state:open"
                     f"&per_page=1"])
+        if data is None:
+            raise GhError(f"empty response from search/issues for {repo}")
         github = data["total_count"]
         results.append({
             "repo": repo,
