@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import pathlib
 
+from . import analytics as analytics_mod
 from . import config, db
 from . import sync as sync_mod
 from . import snapshot as snapshot_mod
@@ -47,6 +48,13 @@ def _cmd_snapshot_bootstrap(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_analytics_export(args: argparse.Namespace) -> int:
+    con = _open_db(args.db)
+    analytics_mod.export(con, args.out)
+    print(f"wrote {args.out}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="triage-hub")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -72,6 +80,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_boot.add_argument("--db", default=DEFAULT_DB)
     p_boot.add_argument("--force", action="store_true")
     p_boot.set_defaults(func=_cmd_snapshot_bootstrap)
+
+    p_an = sub.add_parser("analytics", help="compute burndown analytics")
+    an_sub = p_an.add_subparsers(dest="analytics_command", required=True)
+    p_exp = an_sub.add_parser("export")
+    p_exp.add_argument("--db", default=DEFAULT_DB)
+    p_exp.add_argument("--out", default=".data/analytics.json")
+    p_exp.set_defaults(func=_cmd_analytics_export)
 
     return parser
 
