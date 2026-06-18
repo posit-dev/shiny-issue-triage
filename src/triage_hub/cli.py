@@ -7,6 +7,7 @@ import pathlib
 
 from . import config, db
 from . import sync as sync_mod
+from . import snapshot as snapshot_mod
 
 DEFAULT_DB = ".data/mirror.sqlite"
 DEFAULT_CONFIG = "config/repos.yaml"
@@ -31,6 +32,18 @@ def _cmd_sync(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_snapshot_publish(args: argparse.Namespace) -> int:
+    tag = snapshot_mod.publish(args.db, dated=args.dated)
+    print(f"published snapshot to release {tag} (and {snapshot_mod.LATEST_TAG})")
+    return 0
+
+
+def _cmd_snapshot_bootstrap(args: argparse.Namespace) -> int:
+    snapshot_mod.bootstrap(args.db, force=args.force)
+    print(f"bootstrapped {args.db} from {snapshot_mod.LATEST_TAG}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="triage-hub")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -42,6 +55,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_sync.add_argument("--full", action="store_true",
                         help="ignore cursors and re-walk everything")
     p_sync.set_defaults(func=_cmd_sync)
+
+    p_snap = sub.add_parser("snapshot", help="publish or fetch mirror snapshots")
+    snap_sub = p_snap.add_subparsers(dest="snapshot_command", required=True)
+
+    p_pub = snap_sub.add_parser("publish")
+    p_pub.add_argument("--db", default=DEFAULT_DB)
+    p_pub.add_argument("--dated", action="store_true",
+                       help="also cut a dated mirror-YYYY-MM-DD restore point")
+    p_pub.set_defaults(func=_cmd_snapshot_publish)
+
+    p_boot = snap_sub.add_parser("bootstrap")
+    p_boot.add_argument("--db", default=DEFAULT_DB)
+    p_boot.add_argument("--force", action="store_true")
+    p_boot.set_defaults(func=_cmd_snapshot_bootstrap)
 
     return parser
 
