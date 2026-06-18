@@ -63,6 +63,9 @@ def _prune_dated(gh_run: Callable, keep: int) -> None:
 
 def publish(db_path: str | pathlib.Path, *, gh_run: Callable = run_gh,
             dated: bool = False, today: str | None = None, keep: int = 8) -> str:
+    if not pathlib.Path(db_path).exists():
+        raise SnapshotError(
+            f"{db_path} does not exist; run `triage-hub sync` first")
     with tempfile.TemporaryDirectory() as tmp:
         plain = pathlib.Path(tmp) / "mirror.sqlite"
         packed = pathlib.Path(tmp) / ASSET_NAME
@@ -88,8 +91,12 @@ def bootstrap(db_path: str | pathlib.Path, *, gh_run: Callable = run_gh,
     if db_path.exists() and not force:
         raise SnapshotError(f"{db_path} exists; pass --force to overwrite")
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory() as tmp:
+    # Stage on the same volume as the target so the final replace is atomic;
+    # a failed download/decompress never corrupts an existing mirror.
+    with tempfile.TemporaryDirectory(dir=db_path.parent) as tmp:
         packed = pathlib.Path(tmp) / ASSET_NAME
         gh_run(["release", "download", LATEST_TAG, "--pattern", ASSET_NAME,
                 "--output", str(packed)])
-        decompress(packed, db_path)
+        staged = pathlib.Path(tmp) / "mirror_new.sqlite"
+        decompress(packed, staged)
+        staged.replace(db_path)

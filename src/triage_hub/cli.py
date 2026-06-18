@@ -34,7 +34,10 @@ def _cmd_sync(args: argparse.Namespace) -> int:
 
 def _cmd_snapshot_publish(args: argparse.Namespace) -> int:
     tag = snapshot_mod.publish(args.db, dated=args.dated)
-    print(f"published snapshot to release {tag} (and {snapshot_mod.LATEST_TAG})")
+    if tag == snapshot_mod.LATEST_TAG:
+        print(f"published snapshot to release {tag}")
+    else:
+        print(f"published snapshot to releases {tag} and {snapshot_mod.LATEST_TAG}")
     return 0
 
 

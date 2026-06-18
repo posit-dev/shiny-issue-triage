@@ -49,6 +49,8 @@ def test_publish_uploads_latest_and_dated(tmp_path):
     assert any(c.startswith("release upload mirror-latest") and "--clobber" in c
                for c in flat)
     assert any(c.startswith("release create mirror-2026-06-12") for c in flat)
+    assert any(c.startswith("release upload mirror-2026-06-12") and "--clobber" in c
+               for c in flat)
 
 
 def test_publish_prunes_old_dated_releases(tmp_path):
@@ -88,3 +90,58 @@ def test_bootstrap_refuses_to_overwrite_without_force(tmp_path):
 
     assert raised
     assert target.read_bytes() == b"existing"
+
+
+def test_publish_requires_existing_db(tmp_path):
+    import pytest
+    with pytest.raises(snapshot.SnapshotError, match="does not exist"):
+        snapshot.publish(tmp_path / "nope.sqlite", gh_run=lambda *a, **k: "")
+
+
+def test_bootstrap_force_overwrites_and_is_atomic(tmp_path):
+    # Build a real compressed snapshot to "download".
+    src = db.connect(tmp_path / "src.sqlite")
+    src.execute("INSERT INTO runs (run_id, kind, started_at)"
+                " VALUES ('r1', 'sync', '2026-06-12T00:00:00Z')")
+    src.commit()
+    src.close()
+    plain = tmp_path / "plain.sqlite"
+    snapshot.vacuum_to(tmp_path / "src.sqlite", plain)
+    asset = tmp_path / "asset.zst"
+    snapshot.compress(plain, asset)
+
+    target = tmp_path / "out" / "mirror.sqlite"
+    target.parent.mkdir()
+    target.write_bytes(b"stale")
+
+    def fake_gh(args, **kwargs):
+        # `release download ... --output <path>`: copy our prebuilt asset there
+        out = args[args.index("--output") + 1]
+        pathlib.Path(out).write_bytes(asset.read_bytes())
+        return ""
+
+    snapshot.bootstrap(target, gh_run=fake_gh, force=True)
+
+    restored = db.connect(target)
+    assert restored.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 1
+
+
+def test_bootstrap_creates_parent_dir(tmp_path):
+    src = db.connect(tmp_path / "src.sqlite")
+    src.commit()
+    src.close()
+    plain = tmp_path / "plain.sqlite"
+    snapshot.vacuum_to(tmp_path / "src.sqlite", plain)
+    asset = tmp_path / "asset.zst"
+    snapshot.compress(plain, asset)
+
+    target = tmp_path / "fresh" / "nested" / "mirror.sqlite"
+
+    def fake_gh(args, **kwargs):
+        out = args[args.index("--output") + 1]
+        pathlib.Path(out).write_bytes(asset.read_bytes())
+        return ""
+
+    snapshot.bootstrap(target, gh_run=fake_gh)
+
+    assert target.exists()
