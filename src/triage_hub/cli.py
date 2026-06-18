@@ -9,6 +9,7 @@ from . import analytics as analytics_mod
 from . import config, db
 from . import sync as sync_mod
 from . import snapshot as snapshot_mod
+from . import verify as verify_mod
 
 DEFAULT_DB = ".data/mirror.sqlite"
 DEFAULT_CONFIG = "config/repos.yaml"
@@ -55,6 +56,18 @@ def _cmd_analytics_export(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_verify_counts(args: argparse.Namespace) -> int:
+    repos = [r.full for r in config.load_repos(args.config)]
+    con = _open_db(args.db)
+    results = verify_mod.verify_counts(con, repos)
+    bad = [r for r in results if not r["ok"]]
+    for r in results:
+        flag = "OK " if r["ok"] else "MISMATCH"
+        print(f"{flag} {r['repo']}: mirror={r['mirror']} github={r['github']}")
+    print(f"{len(results) - len(bad)}/{len(results)} repos reconcile")
+    return 1 if bad else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="triage-hub")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -87,6 +100,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_exp.add_argument("--db", default=DEFAULT_DB)
     p_exp.add_argument("--out", default=".data/analytics.json")
     p_exp.set_defaults(func=_cmd_analytics_export)
+
+    p_ver = sub.add_parser("verify-counts",
+                           help="reconcile mirror vs GitHub open-issue counts")
+    p_ver.add_argument("--db", default=DEFAULT_DB)
+    p_ver.add_argument("--config", default=DEFAULT_CONFIG)
+    p_ver.set_defaults(func=_cmd_verify_counts)
 
     return parser
 
