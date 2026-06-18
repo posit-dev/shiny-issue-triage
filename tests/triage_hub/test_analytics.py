@@ -67,3 +67,38 @@ def test_export_writes_json(tmp_path):
     assert "rstudio/shiny" in data["repos"]
     repo_block = data["repos"]["rstudio/shiny"]
     assert {"weekly_open", "weekly_flux", "close_reasons"} <= set(repo_block)
+
+
+def test_weekly_open_counts_first_entry_is_zero(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+    _seed(con)
+
+    series = analytics.weekly_open_counts(con, as_of="2026-02-09T00:00:00Z")
+
+    # Start-of-Monday sampling: the first week (before any issue's creation
+    # instant) shows 0 open. Locks in the documented semantics.
+    assert series[0]["open"] == 0
+
+
+def test_empty_db_returns_empty_analytics(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+
+    assert analytics.weekly_open_counts(con) == []
+    assert analytics.weekly_flux(con) == []
+    assert analytics.close_reason_mix(con) == {}
+
+
+def test_weekly_flux_same_week_open_and_close(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+    con.execute(
+        "INSERT INTO issues (repo, number, title, state, state_reason,"
+        " created_at, updated_at, closed_at)"
+        " VALUES ('rstudio/shiny', 1, 't', 'CLOSED', 'COMPLETED',"
+        " '2026-03-02T09:00:00Z', '2026-03-04T09:00:00Z', '2026-03-04T09:00:00Z')")
+    con.commit()
+
+    flux = analytics.weekly_flux(con)
+    by_week = {f["week"]: f for f in flux}
+    # 2026-03-02 and 2026-03-04 are both in ISO week 2026-W10
+    assert by_week["2026-W10"]["opened"] == 1
+    assert by_week["2026-W10"]["closed"] == 1

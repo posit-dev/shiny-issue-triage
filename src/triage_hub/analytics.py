@@ -42,6 +42,12 @@ def _issue_stamps(con: sqlite3.Connection, repo: str | None):
 
 def weekly_open_counts(con: sqlite3.Connection, *, repo: str | None = None,
                        as_of: str | None = None) -> list[dict]:
+    """Open-issue count measured at 00:00 UTC at the START of each Monday.
+
+    An issue created later that same Monday first appears in the FOLLOWING
+    week's data point, so the first series entry is typically 0. This
+    start-of-week sampling is intentional and consistent across the series.
+    """
     created, closed = _issue_stamps(con, repo)
     if not created:
         return []
@@ -81,8 +87,8 @@ def close_reason_mix(con: sqlite3.Connection, *,
 
 
 def export(con: sqlite3.Connection, out_path: str | pathlib.Path) -> None:
-    repos = [r["repo"] for r in
-             con.execute("SELECT DISTINCT repo FROM issues ORDER BY repo")]
+    repos = [r["repo"] for r in con.execute(
+        "SELECT DISTINCT repo FROM issues WHERE is_pr=0 ORDER BY repo")]
     payload = {
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "totals": {
@@ -99,5 +105,7 @@ def export(con: sqlite3.Connection, out_path: str | pathlib.Path) -> None:
             for repo in repos
         },
     }
-    pathlib.Path(out_path).write_text(json.dumps(payload, indent=2),
-                                      encoding="utf-8")
+    out_path = pathlib.Path(out_path)
+    tmp = out_path.with_name(out_path.name + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    tmp.replace(out_path)
