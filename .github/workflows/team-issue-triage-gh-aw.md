@@ -48,6 +48,7 @@ engine:
     GH_AW_MODEL_AGENT_CLAUDE: sonnet-4-6
 
 max-turns: 100
+max-ai-credits: -1
 timeout-minutes: 60
 
 tools:
@@ -99,6 +100,11 @@ pre-agent-steps:
 safe-outputs:
   allowed-domains: [default-safe-outputs]
   allowed-github-references: []
+  threat-detection:
+    engine:
+      id: claude
+      model: sonnet-4-6
+    max-ai-credits: -1
   jobs:
     summarize-triage-dry-run:
       description: Validate proposed issue triage label actions and publish a dry-run summary without mutating GitHub.
