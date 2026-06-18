@@ -219,12 +219,14 @@ def sync_all(con: sqlite3.Connection, repos: list[str], *,
              full: bool = False, log: Callable[[str], None] = print) -> dict:
     run_id = db.start_run(con, "sync")
     totals = {"repos": 0, "issues": 0, "prs": 0, "comments": 0}
-    for repo in repos:
-        log(f"syncing {repo} ...")
-        totals["issues"] += sync_issues(con, repo, full=full)
-        totals["prs"] += sync_prs(con, repo, full=full)
-        totals["comments"] += sync_comments(con, repo, full=full)
-        totals["repos"] += 1
-        log(f"  done {repo}")
-    db.finish_run(con, run_id, totals)
+    try:
+        for repo in repos:
+            log(f"syncing {repo} ...")
+            totals["issues"] += sync_issues(con, repo, full=full)
+            totals["prs"] += sync_prs(con, repo, full=full)
+            totals["comments"] += sync_comments(con, repo, full=full)
+            totals["repos"] += 1
+            log(f"  done {repo}")
+    finally:
+        db.finish_run(con, run_id, totals)
     return totals

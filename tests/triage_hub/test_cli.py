@@ -53,3 +53,36 @@ def test_cli_sync_single_repo_filter(tmp_path, monkeypatch):
 
     assert rc == 0
     assert captured["repos"] == ["rstudio/bslib"]
+
+
+def test_cli_sync_unknown_repo_returns_1(tmp_path):
+    cfg = tmp_path / "repos.yaml"
+    cfg.write_text("repositories:\n  - rstudio/shiny\n")
+
+    rc = cli.main(["sync", "--db", str(tmp_path / "m.sqlite"),
+                   "--config", str(cfg), "--repo", "rstudio/nonexistent"])
+
+    assert rc == 1
+
+
+def test_sync_all_finishes_run_on_error(tmp_path, monkeypatch):
+    con = db.connect(tmp_path / "m.sqlite")
+    monkeypatch.setattr(sync_mod, "sync_issues", lambda con, repo, **kw: 1)
+
+    def boom(con, repo, **kw):
+        if repo == "rstudio/bslib":
+            raise RuntimeError("network died")
+        return 0
+
+    monkeypatch.setattr(sync_mod, "sync_prs", boom)
+    monkeypatch.setattr(sync_mod, "sync_comments", lambda con, repo, **kw: 0)
+
+    import pytest
+    with pytest.raises(RuntimeError, match="network died"):
+        sync_mod.sync_all(con, ["rstudio/shiny", "rstudio/bslib"],
+                          log=lambda m: None)
+
+    run = con.execute("SELECT * FROM runs").fetchone()
+    assert run["finished_at"] is not None
+    # rstudio/shiny fully synced before the crash on bslib's PRs
+    assert '"issues": 2' in run["summary_json"]
