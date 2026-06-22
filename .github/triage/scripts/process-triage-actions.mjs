@@ -363,7 +363,7 @@ function main() {
     return token;
   };
 
-  const output = parseClaudeOutput(env('CLAUDE_OUTPUT'));
+  const output = parseClaudeOutput(env('CLAUDE_OUTPUT', { required: false }));
   const items = Array.isArray(output.actions) ? output.actions : [];
   if (items.length > LIMITS.actions) {
     fail(`Too many triage actions: ${items.length} > ${LIMITS.actions}`);
