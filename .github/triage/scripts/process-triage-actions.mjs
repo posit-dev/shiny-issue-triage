@@ -168,84 +168,12 @@ function readTokens(filePath) {
   return {};
 }
 
-export function extractJsonObject(raw) {
-  const text = String(raw || '').trim();
-  if (!text) {
-    throw new Error('Claude output is empty.');
-  }
+export function loadClaudeOutput(outputFile = process.env.CLAUDE_OUTPUT_FILE) {
+  if (!outputFile) fail('CLAUDE_OUTPUT_FILE is required.');
   try {
-    return JSON.parse(text);
-  } catch {}
-
-  const start = text.indexOf('{');
-  if (start < 0) {
-    throw new Error('Claude output does not contain a JSON object.');
-  }
-
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let index = start; index < text.length; index += 1) {
-    const char = text[index];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === '\\') {
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-      continue;
-    }
-    if (char === '{') depth += 1;
-    if (char === '}') {
-      depth -= 1;
-      if (depth === 0) {
-        return JSON.parse(text.slice(start, index + 1));
-      }
-    }
-  }
-
-  throw new Error('Claude output contains an unterminated JSON object.');
-}
-
-export function extractClaudeOutputFromExecutionLog(raw) {
-  const events = JSON.parse(String(raw || '[]'));
-  if (!Array.isArray(events) || events.length === 0) {
-    throw new Error('Claude execution log is empty.');
-  }
-
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index];
-    if (event && event.type === 'result' && typeof event.result === 'string' && event.result.trim()) {
-      return extractJsonObject(event.result);
-    }
-  }
-  throw new Error('Claude execution log does not contain a result payload.');
-}
-
-function parseClaudeOutput(raw) {
-  if (String(raw || '').trim()) {
-    try {
-      return JSON.parse(raw);
-    } catch (error) {
-      fail(`Claude structured output was not valid JSON: ${error.message}`);
-    }
-  }
-
-  const executionFile = process.env.CLAUDE_EXECUTION_FILE;
-  if (!executionFile) {
-    fail('Claude did not produce structured output and no execution log was provided.');
-  }
-
-  try {
-    return extractClaudeOutputFromExecutionLog(fs.readFileSync(executionFile, 'utf8'));
+    return JSON.parse(fs.readFileSync(outputFile, 'utf8'));
   } catch (error) {
-    fail(`Claude output fallback failed: ${error.message}`);
+    fail(`Could not read Claude output: ${error.message}`);
   }
   return {};
 }
@@ -363,7 +291,7 @@ function main() {
     return token;
   };
 
-  const output = parseClaudeOutput(env('CLAUDE_OUTPUT', { required: false }));
+  const output = loadClaudeOutput();
   const items = Array.isArray(output.actions) ? output.actions : [];
   if (items.length > LIMITS.actions) {
     fail(`Too many triage actions: ${items.length} > ${LIMITS.actions}`);

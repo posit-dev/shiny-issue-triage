@@ -3,14 +3,16 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 import {
   buildComment,
   commentKindForLabels,
-  extractClaudeOutputFromExecutionLog,
-  extractJsonObject,
   formatPriorityBadge,
   formatSummary,
+  loadClaudeOutput,
   neuterMentions,
   resolveTriageLabels,
   sanitizeComment,
@@ -198,26 +200,13 @@ test('resolveTriageLabels applies done or needs-review based on confidence/label
   assert.deepEqual(resolveTriageLabels(['Priority: Low', 'ai-triage:needs-review', 'ai-triage:done'], 'medium'), ['Priority: Low', 'ai-triage:needs-review']);
 });
 
-test('extractJsonObject accepts plain JSON', () => {
-  assert.deepEqual(extractJsonObject('{"summary":"done","actions":[]}'), {
-    summary: 'done',
-    actions: [],
-  });
-});
+test('loadClaudeOutput reads the fallback JSON file', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'triage-output-'));
+  const outputFile = path.join(directory, 'output.json');
+  t.after(() => fs.rmSync(directory, { recursive: true }));
+  fs.writeFileSync(outputFile, '{"summary":"done","actions":[]}');
 
-test('extractJsonObject pulls the first JSON object out of prose', () => {
-  assert.deepEqual(extractJsonObject('Result:\n{"summary":"done","actions":[]}'), {
-    summary: 'done',
-    actions: [],
-  });
-});
-
-test('extractClaudeOutputFromExecutionLog prefers the result event', () => {
-  const raw = JSON.stringify([
-    { type: 'system', subtype: 'init' },
-    { type: 'result', subtype: 'success', result: '{"summary":"done","actions":[]}' },
-  ]);
-  assert.deepEqual(extractClaudeOutputFromExecutionLog(raw), {
+  assert.deepEqual(loadClaudeOutput(outputFile), {
     summary: 'done',
     actions: [],
   });

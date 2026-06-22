@@ -159,6 +159,7 @@ jobs:
           TRIAGE_LABELS: ${{ env.TRIAGE_LABELS }}
           TRIAGE_RUBRIC: ${{ env.TRIAGE_RUBRIC }}
           TRIAGE_STATE_DIR: ${{ env.TRIAGE_STATE_DIR }}
+          CLAUDE_OUTPUT_FILE: .claude-triage-output.json
           SCAN_SINCE: ${{ inputs.scan_since || '' }}
           MAX_ISSUES_TOTAL: ${{ inputs.max_issues_total || 150 }}
         with:
@@ -205,7 +206,9 @@ jobs:
             - Do not post comments or create issues. The workflow only applies labels; a human will handle follow-up communication.
             - Managed labels already exist on allowlisted repositories because the workflow synchronizes them before triage starts.
 
-            Return structured output only. Use `actions=[]` when no action is needed. Every action must separate facts from the reporter, classification hypothesis, duplicate search, wrong-location check, regression evidence, reproduction plan, impact, priority, and recommended next action in its rationale.
+            Before finishing, use the Write tool to create `.claude-triage-output.json` containing only valid JSON in this shape:
+            `{"summary":"string","actions":[{"action":"triage","repo":"owner/repo","issue_number":"123","labels":["label"],"confidence":"high|medium|low","rationale":"string"}]}`
+            Use `actions=[]` when no action is needed. Every action must separate facts from the reporter, classification hypothesis, duplicate search, wrong-location check, regression evidence, reproduction plan, impact, priority, and recommended next action in its rationale.
           claude_args: |
             --model ${{ env.ANTHROPIC_MODEL }}
             --max-turns 100
@@ -218,8 +221,7 @@ jobs:
 
       - name: Validate and process triage actions
         env:
-          CLAUDE_OUTPUT: ${{ steps.claude.outputs.structured_output }}
-          CLAUDE_EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+          CLAUDE_OUTPUT_FILE: .claude-triage-output.json
           TRIAGE_ISSUE_TOKENS_FILE: ${{ steps.app-tokens.outputs.write_tokens_file }}
           TRIAGE_ALLOWED_REPOS: ${{ steps.repos.outputs.owner_repos }}
           TRIAGE_ALLOWED_LABELS: ${{ steps.labels-config.outputs.allowed }}
