@@ -7,6 +7,8 @@ import assert from 'node:assert/strict';
 import {
   buildComment,
   commentKindForLabels,
+  extractClaudeOutputFromExecutionLog,
+  extractJsonObject,
   formatPriorityBadge,
   formatSummary,
   neuterMentions,
@@ -194,4 +196,29 @@ test('resolveTriageLabels applies done or needs-review based on confidence/label
   assert.deepEqual(resolveTriageLabels(['Priority: Low', 'ai-triage:done'], 'high'), ['Priority: Low', 'ai-triage:done']);
   assert.deepEqual(resolveTriageLabels(['Priority: Low', 'ai-triage:done'], 'low'), ['Priority: Low', 'ai-triage:needs-review']);
   assert.deepEqual(resolveTriageLabels(['Priority: Low', 'ai-triage:needs-review', 'ai-triage:done'], 'medium'), ['Priority: Low', 'ai-triage:needs-review']);
+});
+
+test('extractJsonObject accepts plain JSON', () => {
+  assert.deepEqual(extractJsonObject('{"summary":"done","actions":[]}'), {
+    summary: 'done',
+    actions: [],
+  });
+});
+
+test('extractJsonObject pulls the first JSON object out of prose', () => {
+  assert.deepEqual(extractJsonObject('Result:\n{"summary":"done","actions":[]}'), {
+    summary: 'done',
+    actions: [],
+  });
+});
+
+test('extractClaudeOutputFromExecutionLog prefers the result event', () => {
+  const raw = JSON.stringify([
+    { type: 'system', subtype: 'init' },
+    { type: 'result', subtype: 'success', result: '{"summary":"done","actions":[]}' },
+  ]);
+  assert.deepEqual(extractClaudeOutputFromExecutionLog(raw), {
+    summary: 'done',
+    actions: [],
+  });
 });
