@@ -3,16 +3,12 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 
 import {
   buildComment,
   commentKindForLabels,
   formatPriorityBadge,
   formatSummary,
-  loadClaudeOutput,
   neuterMentions,
   resolveTriageLabels,
   sanitizeComment,
@@ -198,16 +194,4 @@ test('resolveTriageLabels applies done or needs-review based on confidence/label
   assert.deepEqual(resolveTriageLabels(['Priority: Low', 'ai-triage:done'], 'high'), ['Priority: Low', 'ai-triage:done']);
   assert.deepEqual(resolveTriageLabels(['Priority: Low', 'ai-triage:done'], 'low'), ['Priority: Low', 'ai-triage:needs-review']);
   assert.deepEqual(resolveTriageLabels(['Priority: Low', 'ai-triage:needs-review', 'ai-triage:done'], 'medium'), ['Priority: Low', 'ai-triage:needs-review']);
-});
-
-test('loadClaudeOutput reads the fallback JSON file', (t) => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'triage-output-'));
-  const outputFile = path.join(directory, 'output.json');
-  t.after(() => fs.rmSync(directory, { recursive: true }));
-  fs.writeFileSync(outputFile, '{"summary":"done","actions":[]}');
-
-  assert.deepEqual(loadClaudeOutput(outputFile), {
-    summary: 'done',
-    actions: [],
-  });
 });

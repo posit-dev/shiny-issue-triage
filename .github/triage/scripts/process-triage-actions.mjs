@@ -168,12 +168,14 @@ function readTokens(filePath) {
   return {};
 }
 
-export function loadClaudeOutput(outputFile = process.env.CLAUDE_OUTPUT_FILE) {
-  if (!outputFile) fail('CLAUDE_OUTPUT_FILE is required.');
+function parseClaudeOutput(raw) {
+  if (!String(raw || '').trim()) {
+    fail('Claude did not produce structured output. Cannot process triage actions.');
+  }
   try {
-    return JSON.parse(fs.readFileSync(outputFile, 'utf8'));
+    return JSON.parse(raw);
   } catch (error) {
-    fail(`Could not read Claude output: ${error.message}`);
+    fail(`Claude structured output was not valid JSON: ${error.message}`);
   }
   return {};
 }
@@ -291,7 +293,7 @@ function main() {
     return token;
   };
 
-  const output = loadClaudeOutput();
+  const output = parseClaudeOutput(env('CLAUDE_OUTPUT'));
   const items = Array.isArray(output.actions) ? output.actions : [];
   if (items.length > LIMITS.actions) {
     fail(`Too many triage actions: ${items.length} > ${LIMITS.actions}`);
