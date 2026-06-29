@@ -93,7 +93,9 @@ The Anthropic Message Batches API is asynchronous: submit a set of requests, pol
 
 ## 6. Model layer, structured outputs, prompts
 
-A thin `BatchClient` interface wraps the Anthropic SDK: `submit(requests) -> provider_batch_id`, `status(id)`, `results(id)`. Production uses `anthropic`'s `messages.batches`; tests inject a fake. The client is constructed from `ANTHROPIC_API_KEY` in the environment.
+A thin `BatchClient` interface wraps the Anthropic SDK: `submit(requests) -> provider_batch_id`, `status(id)`, `results(id)`. Production uses `anthropic`'s `messages.batches`; tests inject a fake. The SDK reads `ANTHROPIC_API_KEY` from the environment automatically, so there is no manual key-handling step when a key is already present.
+
+We deliberately do **not** route this through the `claude` CLI. That CLI is an interactive coding agent, not a Batch API client — it cannot submit the asynchronous, 50%-off, per-result-metered batches the cost model is built on, and the program design mandates a metered API key for every token. So the SDK + Batch API is required here; the CLI's session auth would not give us the batch path or the spend accounting. The one thing worth borrowing from the `gh`-CLI pattern is the ergonomics: like `gh`, we lean on ambient environment auth (the `ANTHROPIC_API_KEY` the SDK already picks up) rather than asking the operator to pass a key in by hand.
 
 **Structured output.** Each request sets `output_config={"format": {"type": "json_schema", "schema": {...}}}` so the model returns JSON matching the stage schema. Each result is parsed and validated against that schema; a validation failure is recorded as a stage error (and, for labels, any value outside the allowlist is dropped and flagged) rather than aborting the batch.
 
@@ -104,7 +106,7 @@ A thin `BatchClient` interface wraps the Anthropic SDK: `submit(requests) -> pro
 **Classification schema** (enums aligned to the *real* taxonomy in `.github/triage/labels.yaml`):
 
 ```
-{ type:        bug | feature | question | docs | chore,
+{ type:        build | chore | ci | docs | feat | fix | perf | refactor | release | style | test | question,
   priority:    Critical | High | Medium | Low,
   assessment:  actionable | needs-info | stale | likely-fixed | out-of-scope,
   labels:      [ subset of the classification allowlist:
@@ -113,6 +115,8 @@ A thin `BatchClient` interface wraps the Anthropic SDK: `submit(requests) -> pro
                             rationale, confidence },
   confidence:  number 0..1 }
 ```
+
+`type` mirrors the conventional-commit types this repo already enforces (`.github/workflows/verify-conventional-commits.yaml`: build, chore, ci, docs, feat, fix, perf, refactor, release, style, test), plus `question` for support issues. It is an internal triage dimension, not a GitHub label, so it carries no allowlist constraint.
 
 **Dedup schema:**
 
@@ -191,8 +195,8 @@ Unit coverage: embed upsert + hash-change recompute; candidate retrieval (top-k,
 After the offline suite is green:
 
 1. Ensure `rstudio/shinytest2` is synced into the mirror (Plan 1 `sync`).
-2. `export ANTHROPIC_API_KEY=…`
-3. `triage-verse analyze --repo rstudio/shinytest2 --limit 10 --wait`
+2. Confirm `ANTHROPIC_API_KEY` is available — the SDK reads it from the environment automatically, so when it is already set (as it typically is here) there is no manual export step.
+3. `triage-verse analyze --repo rstudio/shinytest2 --wait` — the whole repo. shinytest2's open backlog is small (~59 issues), so there is no need to cap it; running it all gives a more representative smoke test of every stage.
 4. Verify: `spend` rows with non-zero `usd`; `cache_read_input_tokens > 0` on later requests; populated `classifications` and `dedup_verdicts`; a valid `.data/proposals/...jsonl`; the breaker untripped (set `max_usd_per_day` generously). Record the actual cost in a short notes file.
 
 ## 13. Dependencies
@@ -203,8 +207,8 @@ Add `anthropic`, `fastembed`, and `sqlite-vec`. `fastembed` brings ONNX Runtime 
 
 These are defaults I chose; flag any you want changed before the implementation plan:
 
-1. **Classification enums follow the real `.github/triage/labels.yaml`** (priority `Critical|High|Medium|Low`; classification labels `regression | duplicate | wrong location | needs reprex | needs clarification`) rather than the illustrative schema in the program design. The `type` and `assessment` enum sets are not in `labels.yaml` — I proposed `type: bug|feature|question|docs|chore` and `assessment: actionable|needs-info|stale|likely-fixed|out-of-scope`. Confirm those, or adjust.
+1. **Classification enums follow the real `.github/triage/labels.yaml`** (priority `Critical|High|Medium|Low`; classification labels `regression | duplicate | wrong location | needs reprex | needs clarification`) rather than the illustrative schema in the program design. Resolved in review: `type` now mirrors the repo's conventional-commit types (build, chore, ci, docs, feat, fix, perf, refactor, release, style, test) plus `question`. Still my proposal, open to adjustment: the `assessment` set `actionable | needs-info | stale | likely-fixed | out-of-scope`.
 2. **Structured output via `output_config.format` (json_schema)** rather than forced tool-use. Confirm.
 3. **Pricing numbers** in `config/models.yaml` are the design's 2026-06 batch figures — please sanity-check them before the smoke run, since they drive both the USD log and the circuit breaker.
 4. **Circuit breaker is a between-chunk gate** (`max_requests_per_batch: 500`), so a tripped budget can overshoot by at most one chunk. Confirm the chunk size.
-5. **Smoke-run slice** = `rstudio/shinytest2 --limit 10`. Confirm.
+5. **Smoke run** = all open issues in `rstudio/shinytest2` (small backlog — decided in review), not a capped slice. The `--limit` flag stays available for other uses.
