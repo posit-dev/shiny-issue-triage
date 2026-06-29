@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 
-from . import db, llm, prompts
+from . import config, db, llm, prompts
 
 DEDUP_SCHEMA = {
     "type": "object",
@@ -29,7 +30,7 @@ DEDUP_SCHEMA = {
 }
 
 
-def _issue_block(con, repo, number) -> str:
+def _issue_block(con: sqlite3.Connection, repo: str, number: int) -> str:
     row = con.execute(
         "SELECT title, body FROM issues WHERE repo=? AND number=?", (repo, number)
     ).fetchone()
@@ -43,7 +44,13 @@ def _issue_block(con, repo, number) -> str:
     )
 
 
-def build_requests(con, stage, system, pairs, prefix: str = "d"):
+def build_requests(
+    con: sqlite3.Connection,
+    stage: config.StageConfig,
+    system: list[dict[str, object]],
+    pairs: list,
+    prefix: str = "d",
+) -> list[llm.BatchRequest]:
     reqs = []
     for i, (a, b) in enumerate(pairs):
         content = "\n\n".join(
@@ -71,7 +78,7 @@ def build_requests(con, stage, system, pairs, prefix: str = "d"):
     return reqs
 
 
-def parse(result) -> dict | None:
+def parse(result: llm.BatchResult) -> dict | None:
     if result.status != "succeeded":
         return None
     try:
@@ -80,7 +87,9 @@ def parse(result) -> dict | None:
         return None
 
 
-def store(con, pair, data, model, run_id) -> None:
+def store(
+    con: sqlite3.Connection, pair: tuple, data: dict, model: str, run_id: str
+) -> None:
     a, b = pair
     db.upsert_dedup_verdict(
         con,

@@ -43,5 +43,24 @@ def test_store_persists_canonical_pair(tmp_path):
     assert row["verdict"] == "duplicate" and row["hash_a"] == "ha"
 
 
+def test_parse_returns_none_on_errored_result():
+    from triage_verse import llm
+
+    assert dedup.parse(llm.BatchResult("x", "errored", error="invalid_request")) is None
+
+
+def test_parse_returns_none_on_bad_json():
+    from triage_verse import llm
+
+    class _Block:
+        type = "text"
+        text = "not json{"
+
+    class _Msg:
+        content = [_Block()]
+
+    assert dedup.parse(llm.BatchResult("x", "succeeded", message=_Msg())) is None
+
+
 def _stage():
     return config.StageConfig("claude-sonnet-4-6", 1024)
