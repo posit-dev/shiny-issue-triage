@@ -11,19 +11,19 @@ branch behavior, and validation commands.
 
 ## Mirror pipeline (P1)
 
-The `triage-hub` CLI (Python, managed with [uv](https://docs.astral.sh/uv/))
+The `triage-verse` CLI (Python, managed with [uv](https://docs.astral.sh/uv/))
 mirrors issues, PRs, and comments from every repo in `config/repos.yaml` into
 a local SQLite database. GitHub stays the source of truth; the mirror is
 derived data and can always be rebuilt.
 
 ```bash
 uv sync                                      # one-time setup
-uv run triage-hub sync --full                # initial backfill (resumable)
-uv run triage-hub sync                       # incremental refresh (seconds-minutes)
-uv run triage-hub verify-counts              # reconcile against GitHub search
-uv run triage-hub analytics export           # burndown series -> .data/analytics.json
-uv run triage-hub snapshot publish --dated   # upload to mirror-latest + dated tag
-uv run triage-hub snapshot bootstrap         # fresh machine: pull mirror-latest
+uv run triage-verse sync --full                # initial backfill (resumable)
+uv run triage-verse sync                       # incremental refresh (seconds-minutes)
+uv run triage-verse verify-counts              # reconcile against GitHub search
+uv run triage-verse analytics export           # burndown series -> .data/analytics.json
+uv run triage-verse snapshot publish --dated   # upload to mirror-latest + dated tag
+uv run triage-verse snapshot bootstrap         # fresh machine: pull mirror-latest
 ```
 
 Cursors live in the mirror's `repos` table; `--full` ignores them. The
@@ -38,6 +38,6 @@ fleet.
 > bootstrap` round-trip has only been unit-tested with a faked `gh`, not run
 > against real GitHub releases. Smoke-test it once on a scratch checkout
 > (`snapshot publish --dated` then `snapshot bootstrap --force`) before relying
-> on it. See `docs/superpowers/plans/2026-06-12-triage-hub-followups.md`.
+> on it. See `docs/superpowers/plans/2026-06-12-triage-verse-followups.md`.
 
 Design: `docs/superpowers/specs/2026-06-12-shinyverse-issue-triage-design.md`.

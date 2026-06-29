@@ -1,5 +1,5 @@
-from triage_hub import db
-from triage_hub.sync import parse_comment, sync_comments
+from triage_verse import db
+from triage_verse.sync import parse_comment, sync_comments
 
 
 def _item(comment_id, issue_number, updated, body="hello"):

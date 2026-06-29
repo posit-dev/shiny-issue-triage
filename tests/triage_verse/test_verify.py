@@ -1,4 +1,4 @@
-from triage_hub import db, verify
+from triage_verse import db, verify
 
 
 def _seed_open(con, repo, n):

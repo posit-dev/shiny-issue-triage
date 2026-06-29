@@ -1,6 +1,6 @@
 import json
 
-from triage_hub import analytics, db
+from triage_verse import analytics, db
 
 
 def _seed(con):

@@ -1,4 +1,4 @@
-from triage_hub import db
+from triage_verse import db
 
 
 def _issue_row(**overrides):

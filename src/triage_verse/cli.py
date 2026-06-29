@@ -1,4 +1,4 @@
-"""triage-hub command-line interface."""
+"""triage-verse command-line interface."""
 
 from __future__ import annotations
 
@@ -71,7 +71,7 @@ def _cmd_verify_counts(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="triage-hub")
+    parser = argparse.ArgumentParser(prog="triage-verse")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_sync = sub.add_parser("sync", help="mirror issues/PRs/comments to SQLite")

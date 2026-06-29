@@ -1,6 +1,6 @@
 import pathlib
 
-from triage_hub import db, snapshot
+from triage_verse import db, snapshot
 
 
 def test_compress_roundtrip(tmp_path):

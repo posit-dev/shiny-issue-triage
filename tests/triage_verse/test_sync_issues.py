@@ -1,7 +1,7 @@
 import json
 
-from triage_hub import db
-from triage_hub.sync import parse_issue_node, sync_issues
+from triage_verse import db
+from triage_verse.sync import parse_issue_node, sync_issues
 
 
 def _node(number, updated, state="OPEN", **over):

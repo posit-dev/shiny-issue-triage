@@ -4,7 +4,7 @@
 
 **Goal:** Build the P1 data plane from the approved spec (`docs/superpowers/specs/2026-06-12-shinyverse-issue-triage-design.md`): incremental GitHub mirror (issues + PRs + comments, open and closed) into SQLite for all configured shinyverse repos, snapshot publishing/bootstrap via GitHub Releases, burndown analytics computation, and a count-reconciliation command — at $0 model spend.
 
-**Architecture:** A Python package (`src/triage_hub/`) drives everything through the `gh` CLI (no new auth surface): GraphQL for issues/PRs ordered by `updatedAt` DESC with timestamp cursors, REST for repo-wide comment listing with `since` cursors. SQLite is the canonical mirror (WAL mode, idempotent upserts); snapshots are `VACUUM INTO` + zstd uploaded to a rolling `mirror-latest` release plus dated restore points. Analytics are pure functions over the mirror (bisect sweep over created/closed timestamps).
+**Architecture:** A Python package (`src/triage_verse/`) drives everything through the `gh` CLI (no new auth surface): GraphQL for issues/PRs ordered by `updatedAt` DESC with timestamp cursors, REST for repo-wide comment listing with `since` cursors. SQLite is the canonical mirror (WAL mode, idempotent upserts); snapshots are `VACUUM INTO` + zstd uploaded to a rolling `mirror-latest` release plus dated restore points. Analytics are pure functions over the mirror (bisect sweep over created/closed timestamps).
 
 **Tech Stack:** Python ≥3.11 via `uv` (`uv_build` backend), stdlib `sqlite3` + `argparse` + `subprocess`, `pyyaml`, `zstandard`, `pytest` (also collects the existing `unittest` files), `gh` CLI, GitHub Actions CI.
 
@@ -18,7 +18,7 @@
 
 **Files:**
 - Create: `pyproject.toml`
-- Create: `src/triage_hub/__init__.py`
+- Create: `src/triage_verse/__init__.py`
 - Modify: `.gitignore`
 - Modify: `.github/workflows/ci.yml:37-59`
 
@@ -26,7 +26,7 @@
 
 ```toml
 [project]
-name = "triage-hub"
+name = "triage-verse"
 version = "0.1.0"
 description = "Shinyverse issue triage hub: mirror, analytics, and (later) triage pipeline"
 requires-python = ">=3.11"
@@ -36,7 +36,7 @@ dependencies = [
 ]
 
 [project.scripts]
-triage-hub = "triage_hub.cli:main"
+triage-verse = "triage_verse.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8.0"]
@@ -49,9 +49,9 @@ build-backend = "uv_build"
 testpaths = ["tests"]
 ```
 
-(`uv_build` is uv's native build backend; it expects the `src/triage_hub/` layout this plan uses, with the module name derived from the project name. If `uv sync` reports the installed uv is too old for the pinned range, widen the `requires` pin to match `uv --version`.)
+(`uv_build` is uv's native build backend; it expects the `src/triage_verse/` layout this plan uses, with the module name derived from the project name. If `uv sync` reports the installed uv is too old for the pinned range, widen the `requires` pin to match `uv --version`.)
 
-- [ ] **Step 2: Create `src/triage_hub/__init__.py`**
+- [ ] **Step 2: Create `src/triage_verse/__init__.py`**
 
 ```python
 """Shinyverse issue triage hub."""
@@ -72,7 +72,7 @@ Append these lines to the existing `.gitignore` (keep current content):
 - [ ] **Step 4: Install and verify the test suite still passes**
 
 Run: `uv sync && uv run pytest tests/ -v`
-Expected: PASS — the existing `tests/test_resolve_label_specs.py` unittest class is collected by pytest and passes (pytest collects unittest classes natively; the `tests/*.mjs` files are ignored). The `triage-hub` CLI entry point does not exist yet — that's fine, nothing imports `triage_hub.cli` until Task 8.
+Expected: PASS — the existing `tests/test_resolve_label_specs.py` unittest class is collected by pytest and passes (pytest collects unittest classes natively; the `tests/*.mjs` files are ignored). The `triage-verse` CLI entry point does not exist yet — that's fine, nothing imports `triage_verse.cli` until Task 8.
 
 - [ ] **Step 5: Update CI to use uv for all Python steps**
 
@@ -102,8 +102,8 @@ In `.github/workflows/ci.yml`, replace the `Set up Python` / `Install Python dep
 - [ ] **Step 6: Commit**
 
 ```bash
-git add pyproject.toml uv.lock src/triage_hub/__init__.py .gitignore .github/workflows/ci.yml
-git commit -m "feat: scaffold triage-hub Python package with uv and pytest"
+git add pyproject.toml uv.lock src/triage_verse/__init__.py .gitignore .github/workflows/ci.yml
+git commit -m "feat: scaffold triage-verse Python package with uv and pytest"
 ```
 
 ---
@@ -112,19 +112,19 @@ git commit -m "feat: scaffold triage-hub Python package with uv and pytest"
 
 **Files:**
 - Create: `config/repos.yaml`
-- Create: `src/triage_hub/config.py`
-- Test: `tests/triage_hub/test_config.py`
+- Create: `src/triage_verse/config.py`
+- Test: `tests/triage_verse/test_config.py`
 
 - [ ] **Step 1: Write the failing test**
 
-Create `tests/triage_hub/test_config.py`:
+Create `tests/triage_verse/test_config.py`:
 
 ```python
 import pathlib
 
 import pytest
 
-from triage_hub.config import Repo, load_repos
+from triage_verse.config import Repo, load_repos
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
@@ -164,8 +164,8 @@ def test_checked_in_config_keeps_fleet_ready_to_uncomment():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/triage_hub/test_config.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'triage_hub.config'`
+Run: `uv run pytest tests/triage_verse/test_config.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'triage_verse.config'`
 
 - [ ] **Step 3: Create `config/repos.yaml`**
 
@@ -217,7 +217,7 @@ repositories:
   # - posit-dev/great-tables
 ```
 
-- [ ] **Step 4: Create `src/triage_hub/config.py`**
+- [ ] **Step 4: Create `src/triage_verse/config.py`**
 
 ```python
 """Load tenant configuration (repo scope)."""
@@ -254,13 +254,13 @@ def load_repos(path: str | pathlib.Path) -> list[Repo]:
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `uv run pytest tests/triage_hub/test_config.py -v`
+Run: `uv run pytest tests/triage_verse/test_config.py -v`
 Expected: PASS (4 tests)
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add config/repos.yaml src/triage_hub/config.py tests/triage_hub/test_config.py
+git add config/repos.yaml src/triage_verse/config.py tests/triage_verse/test_config.py
 git commit -m "feat: add canonical repo scope config and loader"
 ```
 
@@ -269,15 +269,15 @@ git commit -m "feat: add canonical repo scope config and loader"
 ### Task 3: SQLite mirror schema + upserts (`db.py`)
 
 **Files:**
-- Create: `src/triage_hub/db.py`
-- Test: `tests/triage_hub/test_db.py`
+- Create: `src/triage_verse/db.py`
+- Test: `tests/triage_verse/test_db.py`
 
 - [ ] **Step 1: Write the failing test**
 
-Create `tests/triage_hub/test_db.py`:
+Create `tests/triage_verse/test_db.py`:
 
 ```python
-from triage_hub import db
+from triage_verse import db
 
 
 def _issue_row(**overrides):
@@ -367,10 +367,10 @@ def test_record_run(tmp_path):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/triage_hub/test_db.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'triage_hub.db'`
+Run: `uv run pytest tests/triage_verse/test_db.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'triage_verse.db'`
 
-- [ ] **Step 3: Create `src/triage_hub/db.py`**
+- [ ] **Step 3: Create `src/triage_verse/db.py`**
 
 ```python
 """SQLite mirror: schema, connection, upserts, cursors, run records."""
@@ -528,13 +528,13 @@ def finish_run(con: sqlite3.Connection, run_id: str, summary: dict) -> None:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/triage_hub/test_db.py -v`
+Run: `uv run pytest tests/triage_verse/test_db.py -v`
 Expected: PASS (5 tests)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/triage_hub/db.py tests/triage_hub/test_db.py
+git add src/triage_verse/db.py tests/triage_verse/test_db.py
 git commit -m "feat: add SQLite mirror schema with upserts, cursors, run records"
 ```
 
@@ -543,12 +543,12 @@ git commit -m "feat: add SQLite mirror schema with upserts, cursors, run records
 ### Task 4: `gh` CLI wrapper with retry (`gh.py`)
 
 **Files:**
-- Create: `src/triage_hub/gh.py`
-- Test: `tests/triage_hub/test_gh.py`
+- Create: `src/triage_verse/gh.py`
+- Test: `tests/triage_verse/test_gh.py`
 
 - [ ] **Step 1: Write the failing test**
 
-Create `tests/triage_hub/test_gh.py`:
+Create `tests/triage_verse/test_gh.py`:
 
 ```python
 import json
@@ -556,7 +556,7 @@ import subprocess
 
 import pytest
 
-from triage_hub import gh
+from triage_verse import gh
 
 
 class FakeProc:
@@ -647,10 +647,10 @@ def test_gh_graphql_raises_on_errors(monkeypatch):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/triage_hub/test_gh.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'triage_hub.gh'`
+Run: `uv run pytest tests/triage_verse/test_gh.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'triage_verse.gh'`
 
-- [ ] **Step 3: Create `src/triage_hub/gh.py`**
+- [ ] **Step 3: Create `src/triage_verse/gh.py`**
 
 ```python
 """Thin wrapper around the `gh` CLI (auth and HTTP handled by gh)."""
@@ -705,13 +705,13 @@ def gh_graphql(query: str, variables: dict, **kwargs: Any) -> dict:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/triage_hub/test_gh.py -v`
+Run: `uv run pytest tests/triage_verse/test_gh.py -v`
 Expected: PASS (6 tests)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/triage_hub/gh.py tests/triage_hub/test_gh.py
+git add src/triage_verse/gh.py tests/triage_verse/test_gh.py
 git commit -m "feat: add gh CLI wrapper with rate-limit retry and GraphQL helper"
 ```
 
@@ -720,18 +720,18 @@ git commit -m "feat: add gh CLI wrapper with rate-limit retry and GraphQL helper
 ### Task 5: Issue sync (GraphQL, updatedAt-cursor incremental)
 
 **Files:**
-- Create: `src/triage_hub/sync.py`
-- Test: `tests/triage_hub/test_sync_issues.py`
+- Create: `src/triage_verse/sync.py`
+- Test: `tests/triage_verse/test_sync_issues.py`
 
 - [ ] **Step 1: Write the failing test**
 
-Create `tests/triage_hub/test_sync_issues.py`:
+Create `tests/triage_verse/test_sync_issues.py`:
 
 ```python
 import json
 
-from triage_hub import db
-from triage_hub.sync import parse_issue_node, sync_issues
+from triage_verse import db
+from triage_verse.sync import parse_issue_node, sync_issues
 
 
 def _node(number, updated, state="OPEN", **over):
@@ -822,10 +822,10 @@ def test_incremental_sync_stops_at_cursor(tmp_path):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/triage_hub/test_sync_issues.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'triage_hub.sync'`
+Run: `uv run pytest tests/triage_verse/test_sync_issues.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'triage_verse.sync'`
 
-- [ ] **Step 3: Create `src/triage_hub/sync.py`** (issues portion)
+- [ ] **Step 3: Create `src/triage_verse/sync.py`** (issues portion)
 
 ```python
 """Incremental GitHub → SQLite sync.
@@ -932,13 +932,13 @@ def sync_issues(con: sqlite3.Connection, repo: str, *,
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/triage_hub/test_sync_issues.py -v`
+Run: `uv run pytest tests/triage_verse/test_sync_issues.py -v`
 Expected: PASS (4 tests)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/triage_hub/sync.py tests/triage_hub/test_sync_issues.py
+git add src/triage_verse/sync.py tests/triage_verse/test_sync_issues.py
 git commit -m "feat: add incremental issue sync with updatedAt cursor"
 ```
 
@@ -947,18 +947,18 @@ git commit -m "feat: add incremental issue sync with updatedAt cursor"
 ### Task 6: PR sync (GraphQL)
 
 **Files:**
-- Modify: `src/triage_hub/sync.py` (append)
-- Test: `tests/triage_hub/test_sync_prs.py`
+- Modify: `src/triage_verse/sync.py` (append)
+- Test: `tests/triage_verse/test_sync_prs.py`
 
 - [ ] **Step 1: Write the failing test**
 
-Create `tests/triage_hub/test_sync_prs.py`:
+Create `tests/triage_verse/test_sync_prs.py`:
 
 ```python
 import json
 
-from triage_hub import db
-from triage_hub.sync import parse_pr_node, sync_prs
+from triage_verse import db
+from triage_verse.sync import parse_pr_node, sync_prs
 
 
 def _pr_node(number, updated, **over):
@@ -1015,10 +1015,10 @@ def test_sync_prs_upserts_both_tables(tmp_path):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/triage_hub/test_sync_prs.py -v`
+Run: `uv run pytest tests/triage_verse/test_sync_prs.py -v`
 Expected: FAIL — `ImportError: cannot import name 'parse_pr_node'`
 
-- [ ] **Step 3: Append to `src/triage_hub/sync.py`**
+- [ ] **Step 3: Append to `src/triage_verse/sync.py`**
 
 ```python
 PRS_QUERY = """
@@ -1093,13 +1093,13 @@ def sync_prs(con: sqlite3.Connection, repo: str, *,
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/triage_hub/test_sync_prs.py -v`
+Run: `uv run pytest tests/triage_verse/test_sync_prs.py -v`
 Expected: PASS (2 tests)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/triage_hub/sync.py tests/triage_hub/test_sync_prs.py
+git add src/triage_verse/sync.py tests/triage_verse/test_sync_prs.py
 git commit -m "feat: add PR sync with closing-issue references"
 ```
 
@@ -1108,16 +1108,16 @@ git commit -m "feat: add PR sync with closing-issue references"
 ### Task 7: Comment sync (REST, since-cursor) + comment-recapture test
 
 **Files:**
-- Modify: `src/triage_hub/sync.py` (append)
-- Test: `tests/triage_hub/test_sync_comments.py`
+- Modify: `src/triage_verse/sync.py` (append)
+- Test: `tests/triage_verse/test_sync_comments.py`
 
 - [ ] **Step 1: Write the failing test**
 
-Create `tests/triage_hub/test_sync_comments.py`. The last test is the spec-mandated comment-recapture test (spec "Testing" section): a comment added to an issue created long before the cursor still lands in the mirror.
+Create `tests/triage_verse/test_sync_comments.py`. The last test is the spec-mandated comment-recapture test (spec "Testing" section): a comment added to an issue created long before the cursor still lands in the mirror.
 
 ```python
-from triage_hub import db
-from triage_hub.sync import parse_comment, sync_comments
+from triage_verse import db
+from triage_verse.sync import parse_comment, sync_comments
 
 
 def _item(comment_id, issue_number, updated, body="hello"):
@@ -1190,10 +1190,10 @@ def test_comment_on_old_issue_is_recaptured(tmp_path):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/triage_hub/test_sync_comments.py -v`
+Run: `uv run pytest tests/triage_verse/test_sync_comments.py -v`
 Expected: FAIL — `ImportError: cannot import name 'parse_comment'`
 
-- [ ] **Step 3: Append to `src/triage_hub/sync.py`**
+- [ ] **Step 3: Append to `src/triage_verse/sync.py`**
 
 ```python
 def parse_comment(repo: str, item: dict) -> dict:
@@ -1244,13 +1244,13 @@ def sync_comments(con: sqlite3.Connection, repo: str, *,
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `uv run pytest tests/triage_hub/test_sync_comments.py -v`
+Run: `uv run pytest tests/triage_verse/test_sync_comments.py -v`
 Expected: PASS (4 tests)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/triage_hub/sync.py tests/triage_hub/test_sync_comments.py
+git add src/triage_verse/sync.py tests/triage_verse/test_sync_comments.py
 git commit -m "feat: add REST comment sync with since cursor and recapture test"
 ```
 
@@ -1259,17 +1259,17 @@ git commit -m "feat: add REST comment sync with since cursor and recapture test"
 ### Task 8: Sync orchestration + CLI entry point
 
 **Files:**
-- Modify: `src/triage_hub/sync.py` (append)
-- Create: `src/triage_hub/cli.py`
-- Test: `tests/triage_hub/test_cli.py`
+- Modify: `src/triage_verse/sync.py` (append)
+- Create: `src/triage_verse/cli.py`
+- Test: `tests/triage_verse/test_cli.py`
 
 - [ ] **Step 1: Write the failing test**
 
-Create `tests/triage_hub/test_cli.py`:
+Create `tests/triage_verse/test_cli.py`:
 
 ```python
-from triage_hub import cli, db
-from triage_hub import sync as sync_mod
+from triage_verse import cli, db
+from triage_verse import sync as sync_mod
 
 
 def test_sync_all_records_run_and_counts(tmp_path, monkeypatch):
@@ -1327,10 +1327,10 @@ def test_cli_sync_single_repo_filter(tmp_path, monkeypatch):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/triage_hub/test_cli.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'triage_hub.cli'`
+Run: `uv run pytest tests/triage_verse/test_cli.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'triage_verse.cli'`
 
-- [ ] **Step 3: Append `sync_all` to `src/triage_hub/sync.py`**
+- [ ] **Step 3: Append `sync_all` to `src/triage_verse/sync.py`**
 
 ```python
 def sync_all(con: sqlite3.Connection, repos: list[str], *,
@@ -1348,12 +1348,12 @@ def sync_all(con: sqlite3.Connection, repos: list[str], *,
     return totals
 ```
 
-Note: inside `sync_all`, call the module-level names via plain function calls exactly as written above — tests monkeypatch `triage_hub.sync.sync_issues` etc., so do not import them into local variables.
+Note: inside `sync_all`, call the module-level names via plain function calls exactly as written above — tests monkeypatch `triage_verse.sync.sync_issues` etc., so do not import them into local variables.
 
-- [ ] **Step 4: Create `src/triage_hub/cli.py`**
+- [ ] **Step 4: Create `src/triage_verse/cli.py`**
 
 ```python
-"""triage-hub command-line interface."""
+"""triage-verse command-line interface."""
 
 from __future__ import annotations
 
@@ -1387,7 +1387,7 @@ def _cmd_sync(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="triage-hub")
+    parser = argparse.ArgumentParser(prog="triage-verse")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_sync = sub.add_parser("sync", help="mirror issues/PRs/comments to SQLite")
@@ -1408,12 +1408,12 @@ def main(argv: list[str] | None = None) -> int:
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `uv run pytest tests/triage_hub/test_cli.py -v`
+Run: `uv run pytest tests/triage_verse/test_cli.py -v`
 Expected: PASS (3 tests)
 
 - [ ] **Step 6: Smoke-test against a real small repo (manual, requires `gh auth`)**
 
-Run: `uv run triage-hub sync --repo rstudio/reactlog --full`
+Run: `uv run triage-verse sync --repo rstudio/reactlog --full`
 Expected output shape (counts will vary):
 
 ```
@@ -1428,8 +1428,8 @@ Expected: a number close to 25 (compare with the repo's open-issue count on GitH
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/triage_hub/sync.py src/triage_hub/cli.py tests/triage_hub/test_cli.py
-git commit -m "feat: add sync orchestration and triage-hub CLI"
+git add src/triage_verse/sync.py src/triage_verse/cli.py tests/triage_verse/test_cli.py
+git commit -m "feat: add sync orchestration and triage-verse CLI"
 ```
 
 ---
@@ -1437,18 +1437,18 @@ git commit -m "feat: add sync orchestration and triage-hub CLI"
 ### Task 9: Snapshot publish & bootstrap (GitHub Releases)
 
 **Files:**
-- Create: `src/triage_hub/snapshot.py`
-- Modify: `src/triage_hub/cli.py`
-- Test: `tests/triage_hub/test_snapshot.py`
+- Create: `src/triage_verse/snapshot.py`
+- Modify: `src/triage_verse/cli.py`
+- Test: `tests/triage_verse/test_snapshot.py`
 
 - [ ] **Step 1: Write the failing test**
 
-Create `tests/triage_hub/test_snapshot.py`:
+Create `tests/triage_verse/test_snapshot.py`:
 
 ```python
 import pathlib
 
-from triage_hub import db, snapshot
+from triage_verse import db, snapshot
 
 
 def test_compress_roundtrip(tmp_path):
@@ -1540,10 +1540,10 @@ def test_bootstrap_refuses_to_overwrite_without_force(tmp_path):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/triage_hub/test_snapshot.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'triage_hub.snapshot'`
+Run: `uv run pytest tests/triage_verse/test_snapshot.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'triage_verse.snapshot'`
 
-- [ ] **Step 3: Create `src/triage_hub/snapshot.py`**
+- [ ] **Step 3: Create `src/triage_verse/snapshot.py`**
 
 ```python
 """Publish/bootstrap mirror snapshots as GitHub Release assets.
@@ -1598,7 +1598,7 @@ def _ensure_release(tag: str, gh_run: Callable) -> None:
         gh_run(["release", "view", tag])
     except GhError:
         gh_run(["release", "create", tag, "--title", tag,
-                "--notes", "triage-hub mirror snapshot", "--latest=false"])
+                "--notes", "triage-verse mirror snapshot", "--latest=false"])
 
 
 def _prune_dated(gh_run: Callable, keep: int) -> None:
@@ -1645,7 +1645,7 @@ def bootstrap(db_path: str | pathlib.Path, *, gh_run: Callable = run_gh,
 
 - [ ] **Step 4: Add CLI subcommands**
 
-In `src/triage_hub/cli.py`, add at the top with the other imports:
+In `src/triage_verse/cli.py`, add at the top with the other imports:
 
 ```python
 from . import snapshot as snapshot_mod
@@ -1692,7 +1692,7 @@ Expected: PASS (all tests so far)
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/triage_hub/snapshot.py src/triage_hub/cli.py tests/triage_hub/test_snapshot.py
+git add src/triage_verse/snapshot.py src/triage_verse/cli.py tests/triage_verse/test_snapshot.py
 git commit -m "feat: add snapshot publish/bootstrap via GitHub Releases"
 ```
 
@@ -1701,18 +1701,18 @@ git commit -m "feat: add snapshot publish/bootstrap via GitHub Releases"
 ### Task 10: Analytics (burndown series, weekly flux, close reasons)
 
 **Files:**
-- Create: `src/triage_hub/analytics.py`
-- Modify: `src/triage_hub/cli.py`
-- Test: `tests/triage_hub/test_analytics.py`
+- Create: `src/triage_verse/analytics.py`
+- Modify: `src/triage_verse/cli.py`
+- Test: `tests/triage_verse/test_analytics.py`
 
 - [ ] **Step 1: Write the failing test**
 
-Create `tests/triage_hub/test_analytics.py`:
+Create `tests/triage_verse/test_analytics.py`:
 
 ```python
 import json
 
-from triage_hub import analytics, db
+from triage_verse import analytics, db
 
 
 def _seed(con):
@@ -1783,10 +1783,10 @@ def test_export_writes_json(tmp_path):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/triage_hub/test_analytics.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'triage_hub.analytics'`
+Run: `uv run pytest tests/triage_verse/test_analytics.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'triage_verse.analytics'`
 
-- [ ] **Step 3: Create `src/triage_hub/analytics.py`**
+- [ ] **Step 3: Create `src/triage_verse/analytics.py`**
 
 ```python
 """Burndown and flux analytics over the mirror (issues only, not PRs).
@@ -1896,7 +1896,7 @@ def export(con: sqlite3.Connection, out_path: str | pathlib.Path) -> None:
 
 - [ ] **Step 4: Add CLI subcommand**
 
-In `src/triage_hub/cli.py`, add to the imports:
+In `src/triage_verse/cli.py`, add to the imports:
 
 ```python
 from . import analytics as analytics_mod
@@ -1925,13 +1925,13 @@ Register inside `build_parser()`:
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `uv run pytest tests/triage_hub/test_analytics.py -v`
+Run: `uv run pytest tests/triage_verse/test_analytics.py -v`
 Expected: PASS (4 tests)
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/triage_hub/analytics.py src/triage_hub/cli.py tests/triage_hub/test_analytics.py
+git add src/triage_verse/analytics.py src/triage_verse/cli.py tests/triage_verse/test_analytics.py
 git commit -m "feat: add retroactive burndown analytics with JSON export"
 ```
 
@@ -1940,16 +1940,16 @@ git commit -m "feat: add retroactive burndown analytics with JSON export"
 ### Task 11: Count reconciliation (`verify-counts`)
 
 **Files:**
-- Create: `src/triage_hub/verify.py`
-- Modify: `src/triage_hub/cli.py`
-- Test: `tests/triage_hub/test_verify.py`
+- Create: `src/triage_verse/verify.py`
+- Modify: `src/triage_verse/cli.py`
+- Test: `tests/triage_verse/test_verify.py`
 
 - [ ] **Step 1: Write the failing test**
 
-Create `tests/triage_hub/test_verify.py`:
+Create `tests/triage_verse/test_verify.py`:
 
 ```python
-from triage_hub import db, verify
+from triage_verse import db, verify
 
 
 def _seed_open(con, repo, n):
@@ -1997,10 +1997,10 @@ def test_small_drift_within_tolerance_is_ok(tmp_path):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `uv run pytest tests/triage_hub/test_verify.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'triage_hub.verify'`
+Run: `uv run pytest tests/triage_verse/test_verify.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'triage_verse.verify'`
 
-- [ ] **Step 3: Create `src/triage_hub/verify.py`**
+- [ ] **Step 3: Create `src/triage_verse/verify.py`**
 
 ```python
 """Reconcile mirror open-issue counts against GitHub search totals."""
@@ -2034,7 +2034,7 @@ def verify_counts(con: sqlite3.Connection, repos: list[str], *,
 
 - [ ] **Step 4: Add CLI subcommand**
 
-In `src/triage_hub/cli.py`, add to the imports:
+In `src/triage_verse/cli.py`, add to the imports:
 
 ```python
 from . import verify as verify_mod
@@ -2073,7 +2073,7 @@ Expected: PASS (all tests)
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/triage_hub/verify.py src/triage_hub/cli.py tests/triage_hub/test_verify.py
+git add src/triage_verse/verify.py src/triage_verse/cli.py tests/triage_verse/test_verify.py
 git commit -m "feat: add verify-counts reconciliation command"
 ```
 
@@ -2091,19 +2091,19 @@ Append after the existing content:
 ```markdown
 ## Mirror pipeline (P1)
 
-The `triage-hub` CLI (Python, managed with [uv](https://docs.astral.sh/uv/))
+The `triage-verse` CLI (Python, managed with [uv](https://docs.astral.sh/uv/))
 mirrors issues, PRs, and comments from every repo in `config/repos.yaml` into
 a local SQLite database. GitHub stays the source of truth; the mirror is
 derived data and can always be rebuilt.
 
 ```bash
 uv sync                                  # one-time setup
-uv run triage-hub sync --full            # initial backfill (resumable)
-uv run triage-hub sync                   # incremental refresh (seconds-minutes)
-uv run triage-hub verify-counts          # reconcile against GitHub search
-uv run triage-hub analytics export       # burndown series -> .data/analytics.json
-uv run triage-hub snapshot publish --dated   # upload to mirror-latest + dated tag
-uv run triage-hub snapshot bootstrap     # fresh machine: pull mirror-latest
+uv run triage-verse sync --full            # initial backfill (resumable)
+uv run triage-verse sync                   # incremental refresh (seconds-minutes)
+uv run triage-verse verify-counts          # reconcile against GitHub search
+uv run triage-verse analytics export       # burndown series -> .data/analytics.json
+uv run triage-verse snapshot publish --dated   # upload to mirror-latest + dated tag
+uv run triage-verse snapshot bootstrap     # fresh machine: pull mirror-latest
 ```
 
 Cursors live in the mirror's `repos` table; `--full` ignores them. The
@@ -2131,10 +2131,10 @@ git commit -m "docs: add P1 mirror pipeline runbook"
 
 | Spec exit criterion | How this plan satisfies it |
 |---|---|
-| Counts reconcile with GitHub search | `triage-hub verify-counts` (Task 11), exit code enforces it |
-| Snapshot bootstrap works on a clean machine | `triage-hub snapshot bootstrap` (Task 9) + runbook (Task 12) |
+| Counts reconcile with GitHub search | `triage-verse verify-counts` (Task 11), exit code enforces it |
+| Snapshot bootstrap works on a clean machine | `triage-verse snapshot bootstrap` (Task 9) + runbook (Task 12) |
 | $0 model spend | No Anthropic calls anywhere in P1; `spend` table exists (Task 3) but stays empty |
 | Sync all configured repos, open+closed, comments, PRs | Tasks 5–8 + `config/repos.yaml` (Task 2). Pilot trio is active; the rest of the shinyverse ships commented out, activated by uncommenting when ready |
 | Burndown renders | Data + JSON export here (Task 10); rendering lands with the app plan |
 
-**Post-plan operator step (not a code task):** run `uv run triage-hub sync --full` for the real backfill, then `verify-counts`, then `snapshot publish --dated`. The pilot trio backfills in minutes; once the rest of the fleet is uncommented in `config/repos.yaml`, expect a few hours within GraphQL/REST rate budgets. Either way it is resumable if interrupted.
+**Post-plan operator step (not a code task):** run `uv run triage-verse sync --full` for the real backfill, then `verify-counts`, then `snapshot publish --dated`. The pilot trio backfills in minutes; once the rest of the fleet is uncommented in `config/repos.yaml`, expect a few hours within GraphQL/REST rate budgets. Either way it is resumable if interrupted.

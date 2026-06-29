@@ -3,7 +3,7 @@ import subprocess
 
 import pytest
 
-from triage_hub import gh
+from triage_verse import gh
 
 
 class FakeProc:

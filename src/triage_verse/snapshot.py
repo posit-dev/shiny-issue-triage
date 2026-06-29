@@ -50,7 +50,7 @@ def _ensure_release(tag: str, gh_run: Callable) -> None:
         gh_run(["release", "view", tag])
     except GhError:
         gh_run(["release", "create", tag, "--title", tag,
-                "--notes", "triage-hub mirror snapshot", "--latest=false"])
+                "--notes", "triage-verse mirror snapshot", "--latest=false"])
 
 
 def _prune_dated(gh_run: Callable, keep: int) -> None:
@@ -65,7 +65,7 @@ def publish(db_path: str | pathlib.Path, *, gh_run: Callable = run_gh,
             dated: bool = False, today: str | None = None, keep: int = 8) -> str:
     if not pathlib.Path(db_path).exists():
         raise SnapshotError(
-            f"{db_path} does not exist; run `triage-hub sync` first")
+            f"{db_path} does not exist; run `triage-verse sync` first")
     with tempfile.TemporaryDirectory() as tmp:
         plain = pathlib.Path(tmp) / "mirror.sqlite"
         packed = pathlib.Path(tmp) / ASSET_NAME

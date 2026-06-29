@@ -2,7 +2,7 @@ import pathlib
 
 import pytest
 
-from triage_hub.config import Repo, load_repos
+from triage_verse.config import Repo, load_repos
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 

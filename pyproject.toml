@@ -1,5 +1,5 @@
 [project]
-name = "triage-hub"
+name = "triage-verse"
 version = "0.1.0"
 description = "Shinyverse issue triage hub: mirror, analytics, and (later) triage pipeline"
 requires-python = ">=3.11"
@@ -9,7 +9,7 @@ dependencies = [
 ]
 
 [project.scripts]
-triage-hub = "triage_hub.cli:main"
+triage-verse = "triage_verse.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8.0"]

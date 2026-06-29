@@ -1,5 +1,5 @@
-from triage_hub import cli, db
-from triage_hub import sync as sync_mod
+from triage_verse import cli, db
+from triage_verse import sync as sync_mod
 
 
 def test_sync_all_records_run_and_counts(tmp_path, monkeypatch):

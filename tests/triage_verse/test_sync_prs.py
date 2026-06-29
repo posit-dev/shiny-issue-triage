@@ -1,7 +1,7 @@
 import json
 
-from triage_hub import db
-from triage_hub.sync import parse_pr_node, sync_prs
+from triage_verse import db
+from triage_verse.sync import parse_pr_node, sync_prs
 
 
 def _pr_node(number, updated, **over):
