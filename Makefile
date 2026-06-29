@@ -52,8 +52,14 @@ js-check:  ## Syntax-check and test the Node triage tooling
 	@echo "🟨 Checking Node triage tooling"
 	node --check .github/triage/scripts/create-github-app-token-map.mjs
 	node --check .github/triage/scripts/gh-token-router.mjs
+	node --check .github/triage/scripts/gh-aw-output-adapter.mjs
+	node --check .github/triage/scripts/dry-run-triage-actions.mjs
 	node --check .github/triage/scripts/process-triage-actions.mjs
-	node --test tests/test_process_triage_actions.mjs tests/test_gh_token_router.mjs
+	node --test \
+		tests/test_process_triage_actions.mjs \
+		tests/test_gh_token_router.mjs \
+		tests/test_gh_aw_output_adapter.mjs \
+		tests/test_dry_run_triage_actions.mjs
 
 .PHONY: check
 check: validate-yaml compile-scripts py-check js-check  ## Run everything CI runs

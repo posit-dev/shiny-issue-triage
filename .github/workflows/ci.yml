@@ -15,7 +15,26 @@ permissions:
   contents: read
 
 jobs:
-  check:
+  tests:
+    # Do not run repository code from outside contributors or forks.
+    #
+    # A pull_request whose head branch lives in this repository (not a fork)
+    # can only be created by someone with write access -- outside contributors
+    # must work from a fork, which fails the head-repo check below. That makes
+    # the same-repo check the real trust boundary.
+    #
+    # We deliberately do NOT gate on github.event.pull_request.author_association:
+    # the webhook payload only reflects *public* org membership, so maintainers
+    # with private org membership are reported as COLLABORATOR/CONTRIBUTOR rather
+    # than MEMBER and would be incorrectly skipped.
+    if: >-
+      ${{
+        github.event_name == 'push' ||
+        (
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        )
+      }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

@@ -237,12 +237,9 @@ export function formatSummary(claudeSummary, applied) {
   lines.push('');
 
   if (claudeSummary) {
-    lines.push('<details>');
-    lines.push('<summary>Claude summary</summary>');
+    lines.push('## Triage Summary');
     lines.push('');
     lines.push(claudeSummary);
-    lines.push('');
-    lines.push('</details>');
     lines.push('');
   }
 
