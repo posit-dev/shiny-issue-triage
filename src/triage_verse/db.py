@@ -8,6 +8,10 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 
+import sqlite_vec
+
+VEC_DIM = 384
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS repos (
   repo TEXT PRIMARY KEY,
@@ -121,6 +125,14 @@ CREATE INDEX IF NOT EXISTS idx_issues_updated ON issues(repo, updated_at);
 CREATE INDEX IF NOT EXISTS idx_comments_issue ON comments(repo, issue_number);
 CREATE INDEX IF NOT EXISTS idx_spend_run ON spend(run_id);
 CREATE INDEX IF NOT EXISTS idx_batches_open ON batches(status);
+CREATE TABLE IF NOT EXISTS issue_vectors (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  repo TEXT NOT NULL,
+  number INTEGER NOT NULL,
+  embed_hash TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (repo, number)
+);
 """
 
 ISSUE_COLUMNS = (
@@ -173,7 +185,20 @@ def connect(path: str | pathlib.Path) -> sqlite3.Connection:
     con = sqlite3.connect(path)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
+    try:
+        con.enable_load_extension(True)
+    except AttributeError as exc:  # system Python built without extension loading
+        raise RuntimeError(
+            "this Python's sqlite3 lacks extension-loading support; run under the "
+            "uv-managed interpreter (`uv run`)"
+        ) from exc
+    sqlite_vec.load(con)
+    con.enable_load_extension(False)
     con.executescript(SCHEMA)
+    con.execute(
+        f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_issues "
+        f"USING vec0(embedding float[{VEC_DIM}] distance_metric=cosine)"
+    )
     return con
 
 
@@ -394,3 +419,57 @@ def today_spend_usd(con: sqlite3.Connection) -> float:
         (day + "T00:00:00Z",),
     ).fetchone()
     return float(row["total"])
+
+
+def upsert_vector(
+    con: sqlite3.Connection,
+    repo: str,
+    number: int,
+    embed_hash: str,
+    vector: list[float],
+) -> None:
+    blob = sqlite_vec.serialize_float32(list(vector))
+    existing = con.execute(
+        "SELECT id FROM issue_vectors WHERE repo=? AND number=?", (repo, number)
+    ).fetchone()
+    if existing is None:
+        cur = con.execute(
+            "INSERT INTO issue_vectors (repo, number, embed_hash, updated_at)"
+            " VALUES (?, ?, ?, ?)",
+            (repo, number, embed_hash, _now()),
+        )
+        rowid = cur.lastrowid
+    else:
+        rowid = existing["id"]
+        con.execute(
+            "UPDATE issue_vectors SET embed_hash=?, updated_at=? WHERE id=?",
+            (embed_hash, _now(), rowid),
+        )
+        con.execute("DELETE FROM vec_issues WHERE rowid=?", (rowid,))
+    con.execute(
+        "INSERT INTO vec_issues (rowid, embedding) VALUES (?, ?)", (rowid, blob)
+    )
+
+
+def get_embed_hash(con: sqlite3.Connection, repo: str, number: int) -> str | None:
+    row = con.execute(
+        "SELECT embed_hash FROM issue_vectors WHERE repo=? AND number=?", (repo, number)
+    ).fetchone()
+    return row["embed_hash"] if row else None
+
+
+def knn(
+    con: sqlite3.Connection, vector: list[float], k: int
+) -> list[tuple[str, int, float]]:
+    blob = sqlite_vec.serialize_float32(list(vector))
+    hits = con.execute(
+        "SELECT rowid, distance FROM vec_issues WHERE embedding MATCH ? AND k = ?",
+        (blob, k),
+    ).fetchall()
+    out = []
+    for h in hits:
+        ref = con.execute(
+            "SELECT repo, number FROM issue_vectors WHERE id=?", (h["rowid"],)
+        ).fetchone()
+        out.append((ref["repo"], ref["number"], float(h["distance"])))
+    return out
