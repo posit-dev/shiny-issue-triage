@@ -428,7 +428,13 @@ def upsert_vector(
     embed_hash: str,
     vector: list[float],
 ) -> None:
-    blob = sqlite_vec.serialize_float32(list(vector))
+    vector = list(vector)
+    if len(vector) != VEC_DIM:
+        raise ValueError(
+            f"embedding has {len(vector)} dims, expected {VEC_DIM} "
+            f"(vec_issues is float[{VEC_DIM}]); check config embedding.dim"
+        )
+    blob = sqlite_vec.serialize_float32(vector)
     existing = con.execute(
         "SELECT id FROM issue_vectors WHERE repo=? AND number=?", (repo, number)
     ).fetchone()

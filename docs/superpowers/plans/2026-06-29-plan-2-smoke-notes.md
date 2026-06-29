@@ -75,7 +75,7 @@ ls -la .data/proposals/*/*.jsonl
 head -5 .data/proposals/*/*.jsonl | python3 -c "import sys, json; [json.loads(line) for line in sys.stdin if line.strip()]"
 ```
 
-**Expected:** Records parse as valid JSON and contain an `action` field with one of: `close_duplicate`, `close_invalid`, `label_and_wait`, `no_action`.
+**Expected:** Records parse as valid JSON and contain an `action` field with one of: `add-label`, `set-priority`, `close`, `close-duplicate`.
 
 ### 6. Total cost summary
 Record the total USD spent (sum of all rows in the `spend` table).

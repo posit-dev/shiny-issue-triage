@@ -1,3 +1,5 @@
+import pytest
+
 from triage_verse import db
 
 
@@ -12,6 +14,12 @@ def test_vector_upsert_and_hash(tmp_path):
     assert db.get_embed_hash(con, "r/r", 1) == "h2"
     assert con.execute("SELECT COUNT(*) FROM issue_vectors").fetchone()[0] == 1
     assert con.execute("SELECT COUNT(*) FROM vec_issues").fetchone()[0] == 1
+
+
+def test_upsert_vector_rejects_wrong_dim(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+    with pytest.raises(ValueError, match="expected"):
+        db.upsert_vector(con, "r/r", 1, "h", [1.0, 2.0, 3.0])  # 3 dims, not VEC_DIM
 
 
 def test_knn_orders_by_cosine_distance(tmp_path):
