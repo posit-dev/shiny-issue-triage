@@ -5,7 +5,14 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, cast
+
+if TYPE_CHECKING:
+    import anthropic
+    from anthropic.types.messages.batch_create_params import Request as _BatchRequest
+    from anthropic.types.messages.message_batch_succeeded_result import (
+        MessageBatchSucceededResult as _SucceededResult,
+    )
 
 
 @dataclass
@@ -89,7 +96,7 @@ class FakeBatchClient:
 class AnthropicBatchClient:
     """Real Anthropic Message Batches API. Reads ANTHROPIC_API_KEY from the env."""
 
-    def __init__(self, client=None):
+    def __init__(self, client: anthropic.Anthropic | None = None) -> None:
         if client is None:
             import anthropic
 
@@ -98,12 +105,15 @@ class AnthropicBatchClient:
 
     def submit(self, requests: list[BatchRequest]) -> str:
         batch = self._client.messages.batches.create(
-            requests=[{"custom_id": r.custom_id, "params": r.params} for r in requests]  # type: ignore[arg-type]
+            requests=cast(
+                "list[_BatchRequest]",
+                [{"custom_id": r.custom_id, "params": r.params} for r in requests],
+            )
         )
-        return batch.id  # type: ignore[no-any-return]
+        return batch.id
 
     def status(self, provider_id: str) -> str:
-        return self._client.messages.batches.retrieve(provider_id).processing_status  # type: ignore[no-any-return]
+        return self._client.messages.batches.retrieve(provider_id).processing_status
 
     def results(self, provider_id: str) -> list[BatchResult]:
         out = []
@@ -111,7 +121,11 @@ class AnthropicBatchClient:
             kind = r.result.type
             if kind == "succeeded":
                 out.append(
-                    BatchResult(r.custom_id, "succeeded", message=r.result.message)  # type: ignore[union-attr]
+                    BatchResult(
+                        r.custom_id,
+                        "succeeded",
+                        message=cast("_SucceededResult", r.result).message,
+                    )
                 )
             else:
                 err = getattr(r.result, "error", None)
