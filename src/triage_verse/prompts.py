@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pathlib
+from typing import Any
 
 import yaml
 
@@ -14,19 +15,21 @@ _SYSTEM_INTRO = (
 )
 
 
-def _labels_doc(labels_path) -> dict:
+def _labels_doc(labels_path: str | pathlib.Path) -> dict[str, Any]:
     return yaml.safe_load(pathlib.Path(labels_path).read_text(encoding="utf-8")) or {}
 
 
-def classification_labels(labels_path) -> list[str]:
+def classification_labels(labels_path: str | pathlib.Path) -> list[str]:
     return [e["name"] for e in _labels_doc(labels_path).get("classification", [])]
 
 
-def allowed_labels(labels_path) -> set[str]:
+def allowed_labels(labels_path: str | pathlib.Path) -> set[str]:
     return set(_labels_doc(labels_path).get("allowed_safe_output_labels", []))
 
 
-def validate_labels(labels, allowed):
+def validate_labels(
+    labels: list[str], allowed: set[str]
+) -> tuple[list[str], list[str]]:
     kept = [label for label in labels if label in allowed]
     dropped = [label for label in labels if label not in allowed]
     return kept, dropped
@@ -36,7 +39,9 @@ def delimit(tag: str, text: str | None) -> str:
     return f"<{tag}>\n{text or ''}\n</{tag}>"
 
 
-def build_system(rubric_path, labels_path, repo_blurb: str) -> list[dict]:
+def build_system(
+    rubric_path: str | pathlib.Path, labels_path: str | pathlib.Path, repo_blurb: str
+) -> list[dict[str, object]]:
     rubric = pathlib.Path(rubric_path).read_text(encoding="utf-8")
     taxonomy = pathlib.Path(labels_path).read_text(encoding="utf-8")
     prefix = "\n\n".join(
