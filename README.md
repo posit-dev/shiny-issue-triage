@@ -34,10 +34,5 @@ interrupted incremental syncs simply continue from the last cursor.
 py-shinylive); uncomment the rest of the shinyverse when ready to run the full
 fleet.
 
-> **Before the first full-fleet blitz:** the `snapshot publish`/`snapshot
-> bootstrap` round-trip has only been unit-tested with a faked `gh`, not run
-> against real GitHub releases. Smoke-test it once on a scratch checkout
-> (`snapshot publish --dated` then `snapshot bootstrap --force`) before relying
-> on it. See `docs/superpowers/plans/2026-06-12-triage-verse-followups.md`.
-
 Design: `docs/superpowers/specs/2026-06-12-shinyverse-issue-triage-design.md`.
+Open followups: `docs/superpowers/plans/2026-06-12-triage-verse-followups.md`.
