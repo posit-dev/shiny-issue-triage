@@ -77,17 +77,47 @@ CREATE INDEX IF NOT EXISTS idx_spend_run ON spend(run_id);
 """
 
 ISSUE_COLUMNS = (
-    "repo", "number", "title", "body", "state", "state_reason", "author",
-    "labels_json", "assignees_json", "milestone", "comment_count",
-    "reaction_count", "is_pr", "created_at", "updated_at", "closed_at",
+    "repo",
+    "number",
+    "title",
+    "body",
+    "state",
+    "state_reason",
+    "author",
+    "labels_json",
+    "assignees_json",
+    "milestone",
+    "comment_count",
+    "reaction_count",
+    "is_pr",
+    "created_at",
+    "updated_at",
+    "closed_at",
 )
-PR_COLUMNS = ("repo", "number", "merged", "merged_at",
-              "closing_issue_refs_json", "head_ref", "base_ref")
-COMMENT_COLUMNS = ("repo", "issue_number", "comment_id", "author", "body",
-                   "created_at", "updated_at")
+PR_COLUMNS = (
+    "repo",
+    "number",
+    "merged",
+    "merged_at",
+    "closing_issue_refs_json",
+    "head_ref",
+    "base_ref",
+)
+COMMENT_COLUMNS = (
+    "repo",
+    "issue_number",
+    "comment_id",
+    "author",
+    "body",
+    "created_at",
+    "updated_at",
+)
 
-_CURSOR_KINDS = {"issues": "issues_cursor", "prs": "prs_cursor",
-                 "comments": "comments_cursor"}
+_CURSOR_KINDS = {
+    "issues": "issues_cursor",
+    "prs": "prs_cursor",
+    "comments": "comments_cursor",
+}
 
 
 def connect(path: str | pathlib.Path) -> sqlite3.Connection:
@@ -98,8 +128,13 @@ def connect(path: str | pathlib.Path) -> sqlite3.Connection:
     return con
 
 
-def _upsert(con: sqlite3.Connection, table: str, columns: tuple[str, ...],
-            key: tuple[str, ...], row: dict) -> None:
+def _upsert(
+    con: sqlite3.Connection,
+    table: str,
+    columns: tuple[str, ...],
+    key: tuple[str, ...],
+    row: dict,
+) -> None:
     placeholders = ", ".join(":" + c for c in columns)
     updates = ", ".join(f"{c}=excluded.{c}" for c in columns if c not in key)
     con.execute(
@@ -147,8 +182,10 @@ def start_run(con: sqlite3.Connection, kind: str) -> str:
     open transaction.
     """
     run_id = uuid.uuid4().hex
-    con.execute("INSERT INTO runs (run_id, kind, started_at) VALUES (?, ?, ?)",
-                (run_id, kind, _now()))
+    con.execute(
+        "INSERT INTO runs (run_id, kind, started_at) VALUES (?, ?, ?)",
+        (run_id, kind, _now()),
+    )
     con.commit()
     return run_id
 
@@ -158,6 +195,8 @@ def finish_run(con: sqlite3.Connection, run_id: str, summary: dict) -> None:
 
     This commit also flushes any uncommitted upserts on this connection.
     """
-    con.execute("UPDATE runs SET finished_at=?, summary_json=? WHERE run_id=?",
-                (_now(), json.dumps(summary), run_id))
+    con.execute(
+        "UPDATE runs SET finished_at=?, summary_json=? WHERE run_id=?",
+        (_now(), json.dumps(summary), run_id),
+    )
     con.commit()

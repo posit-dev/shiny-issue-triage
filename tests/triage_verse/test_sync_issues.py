@@ -26,10 +26,14 @@ def _node(number, updated, state="OPEN", **over):
 
 
 def _page(nodes, has_next=False, end_cursor=None):
-    return {"repository": {"issues": {
-        "pageInfo": {"hasNextPage": has_next, "endCursor": end_cursor},
-        "nodes": nodes,
-    }}}
+    return {
+        "repository": {
+            "issues": {
+                "pageInfo": {"hasNextPage": has_next, "endCursor": end_cursor},
+                "nodes": nodes,
+            }
+        }
+    }
 
 
 def test_parse_issue_node_maps_fields():
@@ -53,8 +57,11 @@ def test_parse_issue_node_handles_deleted_author():
 def test_full_sync_walks_all_pages_and_sets_cursor(tmp_path):
     con = db.connect(tmp_path / "m.sqlite")
     pages = [
-        _page([_node(3, "2026-06-03T00:00:00Z"),
-               _node(2, "2026-06-02T00:00:00Z")], has_next=True, end_cursor="c1"),
+        _page(
+            [_node(3, "2026-06-03T00:00:00Z"), _node(2, "2026-06-02T00:00:00Z")],
+            has_next=True,
+            end_cursor="c1",
+        ),
         _page([_node(1, "2026-06-01T00:00:00Z")]),
     ]
     calls = []
@@ -75,14 +82,18 @@ def test_incremental_sync_stops_at_cursor(tmp_path):
     con = db.connect(tmp_path / "m.sqlite")
     db.set_cursor(con, "rstudio/shiny", "issues", "2026-06-02T00:00:00Z")
     pages = [
-        _page([_node(3, "2026-06-03T00:00:00Z"),
-               _node(2, "2026-06-02T00:00:00Z"),   # == cursor: still upserted
-               _node(1, "2026-06-01T00:00:00Z")],  # < cursor: stop, not upserted
-              has_next=True, end_cursor="c1"),
+        _page(
+            [
+                _node(3, "2026-06-03T00:00:00Z"),
+                _node(2, "2026-06-02T00:00:00Z"),  # == cursor: still upserted
+                _node(1, "2026-06-01T00:00:00Z"),
+            ],  # < cursor: stop, not upserted
+            has_next=True,
+            end_cursor="c1",
+        ),
     ]
 
-    count = sync_issues(con, "rstudio/shiny",
-                        graphql=lambda q, v: pages[0], full=False)
+    count = sync_issues(con, "rstudio/shiny", graphql=lambda q, v: pages[0], full=False)
 
     assert count == 2
     numbers = {r["number"] for r in con.execute("SELECT number FROM issues")}
@@ -93,8 +104,7 @@ def test_incremental_sync_stops_at_cursor(tmp_path):
 def test_empty_repo_sets_no_cursor(tmp_path):
     con = db.connect(tmp_path / "m.sqlite")
 
-    count = sync_issues(con, "rstudio/shiny",
-                        graphql=lambda q, v: _page([]), full=True)
+    count = sync_issues(con, "rstudio/shiny", graphql=lambda q, v: _page([]), full=True)
 
     assert count == 0
     assert con.execute("SELECT COUNT(*) FROM issues").fetchone()[0] == 0
@@ -105,11 +115,17 @@ def test_full_sync_ignores_existing_cursor(tmp_path):
     con = db.connect(tmp_path / "m.sqlite")
     db.set_cursor(con, "rstudio/shiny", "issues", "2026-06-02T12:00:00Z")
 
-    count = sync_issues(con, "rstudio/shiny",
-                        graphql=lambda q, v: _page([
-                            _node(3, "2026-06-03T00:00:00Z"),
-                            _node(1, "2026-06-01T00:00:00Z"),
-                        ]), full=True)
+    count = sync_issues(
+        con,
+        "rstudio/shiny",
+        graphql=lambda q, v: _page(
+            [
+                _node(3, "2026-06-03T00:00:00Z"),
+                _node(1, "2026-06-01T00:00:00Z"),
+            ]
+        ),
+        full=True,
+    )
 
     assert count == 2
     assert db.get_cursor(con, "rstudio/shiny", "issues") == "2026-06-03T00:00:00Z"

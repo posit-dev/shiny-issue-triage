@@ -47,10 +47,8 @@ def parse_issue_node(repo: str, node: dict) -> dict:
         "state": node["state"],
         "state_reason": node.get("stateReason"),
         "author": author.get("login"),
-        "labels_json": json.dumps(
-            [label["name"] for label in node["labels"]["nodes"]]),
-        "assignees_json": json.dumps(
-            [a["login"] for a in node["assignees"]["nodes"]]),
+        "labels_json": json.dumps([label["name"] for label in node["labels"]["nodes"]]),
+        "assignees_json": json.dumps([a["login"] for a in node["assignees"]["nodes"]]),
         "milestone": milestone.get("title"),
         "comment_count": node["comments"]["totalCount"],
         "reaction_count": node["reactions"]["totalCount"],
@@ -61,10 +59,16 @@ def parse_issue_node(repo: str, node: dict) -> dict:
     }
 
 
-def _walk_updated_desc(con: sqlite3.Connection, repo: str, kind: str,
-                       query: str, connection_key: str,
-                       upsert: Callable[[sqlite3.Connection, dict], int],
-                       graphql: Callable, full: bool) -> int:
+def _walk_updated_desc(
+    con: sqlite3.Connection,
+    repo: str,
+    kind: str,
+    query: str,
+    connection_key: str,
+    upsert: Callable[[sqlite3.Connection, dict], int],
+    graphql: Callable,
+    full: bool,
+) -> int:
     owner, name = repo.split("/")
     cursor = None if full else db.get_cursor(con, repo, kind)
     after = None
@@ -90,14 +94,20 @@ def _walk_updated_desc(con: sqlite3.Connection, repo: str, kind: str,
     return count
 
 
-def sync_issues(con: sqlite3.Connection, repo: str, *,
-                graphql: Callable = gh_graphql, full: bool = False) -> int:
+def sync_issues(
+    con: sqlite3.Connection,
+    repo: str,
+    *,
+    graphql: Callable = gh_graphql,
+    full: bool = False,
+) -> int:
     def upsert(con_: sqlite3.Connection, node: dict) -> int:
         db.upsert_issue(con_, parse_issue_node(repo, node))
         return 1
 
-    return _walk_updated_desc(con, repo, "issues", ISSUES_QUERY, "issues",
-                              upsert, graphql, full)
+    return _walk_updated_desc(
+        con, repo, "issues", ISSUES_QUERY, "issues", upsert, graphql, full
+    )
 
 
 PRS_QUERY = """
@@ -133,10 +143,8 @@ def parse_pr_node(repo: str, node: dict) -> tuple[dict, dict]:
         "state": node["state"],
         "state_reason": None,
         "author": author.get("login"),
-        "labels_json": json.dumps(
-            [label["name"] for label in node["labels"]["nodes"]]),
-        "assignees_json": json.dumps(
-            [a["login"] for a in node["assignees"]["nodes"]]),
+        "labels_json": json.dumps([label["name"] for label in node["labels"]["nodes"]]),
+        "assignees_json": json.dumps([a["login"] for a in node["assignees"]["nodes"]]),
         "milestone": milestone.get("title"),
         "comment_count": node["comments"]["totalCount"],
         "reaction_count": 0,
@@ -151,23 +159,30 @@ def parse_pr_node(repo: str, node: dict) -> tuple[dict, dict]:
         "merged": 1 if node.get("merged") else 0,
         "merged_at": node.get("mergedAt"),
         "closing_issue_refs_json": json.dumps(
-            [n["number"] for n in node["closingIssuesReferences"]["nodes"]]),
+            [n["number"] for n in node["closingIssuesReferences"]["nodes"]]
+        ),
         "head_ref": node.get("headRefName"),
         "base_ref": node.get("baseRefName"),
     }
     return issue_row, pr_row
 
 
-def sync_prs(con: sqlite3.Connection, repo: str, *,
-             graphql: Callable = gh_graphql, full: bool = False) -> int:
+def sync_prs(
+    con: sqlite3.Connection,
+    repo: str,
+    *,
+    graphql: Callable = gh_graphql,
+    full: bool = False,
+) -> int:
     def upsert(con_: sqlite3.Connection, node: dict) -> int:
         issue_row, pr_row = parse_pr_node(repo, node)
         db.upsert_issue(con_, issue_row)
         db.upsert_pr(con_, pr_row)
         return 1
 
-    return _walk_updated_desc(con, repo, "prs", PRS_QUERY, "pullRequests",
-                              upsert, graphql, full)
+    return _walk_updated_desc(
+        con, repo, "prs", PRS_QUERY, "pullRequests", upsert, graphql, full
+    )
 
 
 def parse_comment(repo: str, item: dict) -> dict:
@@ -184,8 +199,13 @@ def parse_comment(repo: str, item: dict) -> dict:
     }
 
 
-def sync_comments(con: sqlite3.Connection, repo: str, *,
-                  api: Callable = None, full: bool = False) -> int:
+def sync_comments(
+    con: sqlite3.Connection,
+    repo: str,
+    *,
+    api: Callable | None = None,
+    full: bool = False,
+) -> int:
     """Repo-wide issue-comment listing (covers issue and PR discussion
     threads; PR diff-review comments are out of scope for the mirror)."""
     if api is None:
@@ -196,9 +216,11 @@ def sync_comments(con: sqlite3.Connection, repo: str, *,
     count = 0
     page = 1
     while True:
-        path = (f"repos/{repo}/issues/comments"
-                f"?sort=updated&direction=asc&per_page=100"
-                f"&since={since}&page={page}")
+        path = (
+            f"repos/{repo}/issues/comments"
+            f"?sort=updated&direction=asc&per_page=100"
+            f"&since={since}&page={page}"
+        )
         items = api(["api", path]) or []
         for item in items:
             row = parse_comment(repo, item)
@@ -215,8 +237,13 @@ def sync_comments(con: sqlite3.Connection, repo: str, *,
     return count
 
 
-def sync_all(con: sqlite3.Connection, repos: list[str], *,
-             full: bool = False, log: Callable[[str], None] = print) -> dict:
+def sync_all(
+    con: sqlite3.Connection,
+    repos: list[str],
+    *,
+    full: bool = False,
+    log: Callable[[str], None] = print,
+) -> dict:
     run_id = db.start_run(con, "sync")
     totals = {"repos": 0, "issues": 0, "prs": 0, "comments": 0}
     try:

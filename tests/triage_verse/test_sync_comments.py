@@ -59,14 +59,14 @@ def test_comment_on_old_issue_is_recaptured(tmp_path):
     con.execute(
         "INSERT INTO issues (repo, number, title, state, created_at, updated_at)"
         " VALUES ('rstudio/shiny', 50, 'ancient', 'OPEN',"
-        " '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z')")
+        " '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z')"
+    )
     db.set_cursor(con, "rstudio/shiny", "comments", "2026-06-01T00:00:00Z")
 
     new_comment = _item(99, 50, "2026-06-10T00:00:00Z", body="still broken!")
     sync_comments(con, "rstudio/shiny", api=lambda args: [new_comment])
 
-    row = con.execute(
-        "SELECT * FROM comments WHERE issue_number=50").fetchone()
+    row = con.execute("SELECT * FROM comments WHERE issue_number=50").fetchone()
     assert row["body"] == "still broken!"
     assert db.get_cursor(con, "rstudio/shiny", "comments") == "2026-06-10T00:00:00Z"
 

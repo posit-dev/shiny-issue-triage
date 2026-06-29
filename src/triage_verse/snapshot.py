@@ -49,23 +49,41 @@ def _ensure_release(tag: str, gh_run: Callable) -> None:
     try:
         gh_run(["release", "view", tag])
     except GhError:
-        gh_run(["release", "create", tag, "--title", tag,
-                "--notes", "triage-verse mirror snapshot", "--latest=false"])
+        gh_run(
+            [
+                "release",
+                "create",
+                tag,
+                "--title",
+                tag,
+                "--notes",
+                "triage-verse mirror snapshot",
+                "--latest=false",
+            ]
+        )
 
 
 def _prune_dated(gh_run: Callable, keep: int) -> None:
     out = gh_run(["release", "list", "--limit", "100", "--json", "tagName"])
-    tags = [r["tagName"] for r in json.loads(out)
-            if r["tagName"].startswith("mirror-") and r["tagName"] != LATEST_TAG]
+    tags = [
+        r["tagName"]
+        for r in json.loads(out)
+        if r["tagName"].startswith("mirror-") and r["tagName"] != LATEST_TAG
+    ]
     for tag in sorted(tags, reverse=True)[keep:]:
         gh_run(["release", "delete", tag, "--yes", "--cleanup-tag"])
 
 
-def publish(db_path: str | pathlib.Path, *, gh_run: Callable = run_gh,
-            dated: bool = False, today: str | None = None, keep: int = 8) -> str:
+def publish(
+    db_path: str | pathlib.Path,
+    *,
+    gh_run: Callable = run_gh,
+    dated: bool = False,
+    today: str | None = None,
+    keep: int = 8,
+) -> str:
     if not pathlib.Path(db_path).exists():
-        raise SnapshotError(
-            f"{db_path} does not exist; run `triage-verse sync` first")
+        raise SnapshotError(f"{db_path} does not exist; run `triage-verse sync` first")
     with tempfile.TemporaryDirectory() as tmp:
         plain = pathlib.Path(tmp) / "mirror.sqlite"
         packed = pathlib.Path(tmp) / ASSET_NAME
@@ -85,8 +103,9 @@ def publish(db_path: str | pathlib.Path, *, gh_run: Callable = run_gh,
     return LATEST_TAG
 
 
-def bootstrap(db_path: str | pathlib.Path, *, gh_run: Callable = run_gh,
-              force: bool = False) -> None:
+def bootstrap(
+    db_path: str | pathlib.Path, *, gh_run: Callable = run_gh, force: bool = False
+) -> None:
     db_path = pathlib.Path(db_path)
     if db_path.exists() and not force:
         raise SnapshotError(f"{db_path} exists; pass --force to overwrite")
@@ -95,8 +114,17 @@ def bootstrap(db_path: str | pathlib.Path, *, gh_run: Callable = run_gh,
     # a failed download/decompress never corrupts an existing mirror.
     with tempfile.TemporaryDirectory(dir=db_path.parent) as tmp:
         packed = pathlib.Path(tmp) / ASSET_NAME
-        gh_run(["release", "download", LATEST_TAG, "--pattern", ASSET_NAME,
-                "--output", str(packed)])
+        gh_run(
+            [
+                "release",
+                "download",
+                LATEST_TAG,
+                "--pattern",
+                ASSET_NAME,
+                "--output",
+                str(packed),
+            ]
+        )
         staged = pathlib.Path(tmp) / "mirror_new.sqlite"
         decompress(packed, staged)
         staged.replace(db_path)

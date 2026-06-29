@@ -22,8 +22,7 @@ def load_repos(path: str | pathlib.Path) -> list[Repo]:
     data = yaml.safe_load(pathlib.Path(path).read_text(encoding="utf-8")) or {}
     entries = data.get("repositories") or []
     if not isinstance(entries, list):
-        raise ValueError(
-            f"'repositories' must be a list, got {type(entries).__name__}")
+        raise ValueError(f"'repositories' must be a list, got {type(entries).__name__}")
     repos: list[Repo] = []
     for entry in entries:
         owner, sep, name = str(entry).partition("/")

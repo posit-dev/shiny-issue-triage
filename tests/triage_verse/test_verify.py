@@ -6,7 +6,9 @@ def _seed_open(con, repo, n):
         con.execute(
             "INSERT INTO issues (repo, number, title, state, created_at,"
             " updated_at) VALUES (?, ?, 't', 'OPEN',"
-            " '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')", (repo, i + 1))
+            " '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            (repo, i + 1),
+        )
     con.commit()
 
 
@@ -23,8 +25,9 @@ def test_verify_counts_reports_match_and_mismatch(tmp_path):
                 return {"total_count": total}
         raise AssertionError(f"unexpected call: {args}")
 
-    results = verify.verify_counts(con, ["rstudio/shiny", "rstudio/bslib"],
-                                   api=fake_api, tolerance=2)
+    results = verify.verify_counts(
+        con, ["rstudio/shiny", "rstudio/bslib"], api=fake_api, tolerance=2
+    )
 
     by_repo = {r["repo"]: r for r in results}
     assert by_repo["rstudio/shiny"]["ok"] is True
@@ -38,8 +41,8 @@ def test_small_drift_within_tolerance_is_ok(tmp_path):
     _seed_open(con, "rstudio/shiny", 10)
 
     results = verify.verify_counts(
-        con, ["rstudio/shiny"],
-        api=lambda args: {"total_count": 11}, tolerance=2)
+        con, ["rstudio/shiny"], api=lambda args: {"total_count": 11}, tolerance=2
+    )
 
     assert results[0]["ok"] is True
 
@@ -50,11 +53,11 @@ def test_tolerance_boundary_is_inclusive(tmp_path):
 
     # diff == tolerance exactly -> ok; diff > tolerance -> not ok
     at_bound = verify.verify_counts(
-        con, ["rstudio/shiny"],
-        api=lambda args: {"total_count": 12}, tolerance=2)
+        con, ["rstudio/shiny"], api=lambda args: {"total_count": 12}, tolerance=2
+    )
     over_bound = verify.verify_counts(
-        con, ["rstudio/shiny"],
-        api=lambda args: {"total_count": 13}, tolerance=2)
+        con, ["rstudio/shiny"], api=lambda args: {"total_count": 13}, tolerance=2
+    )
 
     assert at_bound[0]["ok"] is True
     assert over_bound[0]["ok"] is False
@@ -67,12 +70,13 @@ def test_prs_are_not_counted_on_mirror_side(tmp_path):
     con.execute(
         "INSERT INTO issues (repo, number, title, state, is_pr,"
         " created_at, updated_at) VALUES ('rstudio/shiny', 999, 'pr', 'OPEN', 1,"
-        " '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+        " '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')"
+    )
     con.commit()
 
     results = verify.verify_counts(
-        con, ["rstudio/shiny"],
-        api=lambda args: {"total_count": 3}, tolerance=0)
+        con, ["rstudio/shiny"], api=lambda args: {"total_count": 3}, tolerance=0
+    )
 
     assert results[0]["mirror"] == 3
     assert results[0]["ok"] is True

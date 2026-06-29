@@ -29,8 +29,10 @@ def _cmd_sync(args: argparse.Namespace) -> int:
         repos = [args.repo]
     con = _open_db(args.db)
     totals = sync_mod.sync_all(con, repos, full=args.full, log=print)
-    print(f"synced {totals['repos']} repos: {totals['issues']} issues, "
-          f"{totals['prs']} PRs, {totals['comments']} comments")
+    print(
+        f"synced {totals['repos']} repos: {totals['issues']} issues, "
+        f"{totals['prs']} PRs, {totals['comments']} comments"
+    )
     return 0
 
 
@@ -64,8 +66,10 @@ def _cmd_verify_counts(args: argparse.Namespace) -> int:
     for r in results:
         flag = "OK " if r["ok"] else "MISMATCH"
         diff = r["github"] - r["mirror"]
-        print(f"{flag} {r['repo']}: mirror={r['mirror']} "
-              f"github={r['github']} diff={diff:+d}")
+        print(
+            f"{flag} {r['repo']}: mirror={r['mirror']} "
+            f"github={r['github']} diff={diff:+d}"
+        )
     print(f"{len(results) - len(bad)}/{len(results)} repos reconcile")
     return 1 if bad else 0
 
@@ -78,8 +82,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_sync.add_argument("--db", default=DEFAULT_DB)
     p_sync.add_argument("--config", default=DEFAULT_CONFIG)
     p_sync.add_argument("--repo", help="sync only this owner/name")
-    p_sync.add_argument("--full", action="store_true",
-                        help="ignore cursors and re-walk everything")
+    p_sync.add_argument(
+        "--full", action="store_true", help="ignore cursors and re-walk everything"
+    )
     p_sync.set_defaults(func=_cmd_sync)
 
     p_snap = sub.add_parser("snapshot", help="publish or fetch mirror snapshots")
@@ -87,8 +92,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_pub = snap_sub.add_parser("publish")
     p_pub.add_argument("--db", default=DEFAULT_DB)
-    p_pub.add_argument("--dated", action="store_true",
-                       help="also cut a dated mirror-YYYY-MM-DD restore point")
+    p_pub.add_argument(
+        "--dated",
+        action="store_true",
+        help="also cut a dated mirror-YYYY-MM-DD restore point",
+    )
     p_pub.set_defaults(func=_cmd_snapshot_publish)
 
     p_boot = snap_sub.add_parser("bootstrap")
@@ -103,12 +111,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_exp.add_argument("--out", default=".data/analytics.json")
     p_exp.set_defaults(func=_cmd_analytics_export)
 
-    p_ver = sub.add_parser("verify-counts",
-                           help="reconcile mirror vs GitHub open-issue counts")
+    p_ver = sub.add_parser(
+        "verify-counts", help="reconcile mirror vs GitHub open-issue counts"
+    )
     p_ver.add_argument("--db", default=DEFAULT_DB)
     p_ver.add_argument("--config", default=DEFAULT_CONFIG)
-    p_ver.add_argument("--tolerance", type=int, default=2,
-                       help="max mirror-vs-github drift treated as OK")
+    p_ver.add_argument(
+        "--tolerance",
+        type=int,
+        default=2,
+        help="max mirror-vs-github drift treated as OK",
+    )
     p_ver.set_defaults(func=_cmd_verify_counts)
 
     return parser

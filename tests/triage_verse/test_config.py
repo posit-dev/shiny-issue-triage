@@ -30,8 +30,7 @@ def test_checked_in_config_is_pilot_trio():
 
     fulls = [r.full for r in repos]
     assert len(fulls) == len(set(fulls))
-    assert fulls == ["rstudio/reactlog", "rstudio/shinytest2",
-                     "posit-dev/py-shinylive"]
+    assert fulls == ["rstudio/reactlog", "rstudio/shinytest2", "posit-dev/py-shinylive"]
 
 
 def test_checked_in_config_keeps_fleet_ready_to_uncomment():

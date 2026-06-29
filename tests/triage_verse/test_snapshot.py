@@ -18,8 +18,10 @@ def test_compress_roundtrip(tmp_path):
 
 def test_vacuum_to_produces_queryable_copy(tmp_path):
     con = db.connect(tmp_path / "m.sqlite")
-    con.execute("INSERT INTO runs (run_id, kind, started_at)"
-                " VALUES ('r1', 'sync', '2026-06-12T00:00:00Z')")
+    con.execute(
+        "INSERT INTO runs (run_id, kind, started_at)"
+        " VALUES ('r1', 'sync', '2026-06-12T00:00:00Z')"
+    )
     con.commit()
     out = tmp_path / "copy.sqlite"
 
@@ -41,16 +43,20 @@ def test_publish_uploads_latest_and_dated(tmp_path):
             return '[{"tagName": "mirror-2026-06-01"}]'
         return ""
 
-    snapshot.publish(tmp_path / "m.sqlite", gh_run=fake_gh, dated=True,
-                     today="2026-06-12")
+    snapshot.publish(
+        tmp_path / "m.sqlite", gh_run=fake_gh, dated=True, today="2026-06-12"
+    )
 
     flat = [" ".join(c) for c in commands]
     assert any(c.startswith("release create mirror-latest") for c in flat)
-    assert any(c.startswith("release upload mirror-latest") and "--clobber" in c
-               for c in flat)
+    assert any(
+        c.startswith("release upload mirror-latest") and "--clobber" in c for c in flat
+    )
     assert any(c.startswith("release create mirror-2026-06-12") for c in flat)
-    assert any(c.startswith("release upload mirror-2026-06-12") and "--clobber" in c
-               for c in flat)
+    assert any(
+        c.startswith("release upload mirror-2026-06-12") and "--clobber" in c
+        for c in flat
+    )
 
 
 def test_publish_prunes_old_dated_releases(tmp_path):
@@ -68,14 +74,18 @@ def test_publish_prunes_old_dated_releases(tmp_path):
             return snapshot.json.dumps([{"tagName": t} for t in listed])
         return ""
 
-    snapshot.publish(tmp_path / "m.sqlite", gh_run=fake_gh, dated=True,
-                     today="2026-06-12", keep=8)
+    snapshot.publish(
+        tmp_path / "m.sqlite", gh_run=fake_gh, dated=True, today="2026-06-12", keep=8
+    )
 
     deletes = [c for c in commands if c[:2] == ["release", "delete"]]
     deleted_tags = {c[2] for c in deletes}
     # 10 existing + 1 new = 11; keep 8 newest -> delete 3 oldest
-    assert deleted_tags == {"mirror-2026-05-01", "mirror-2026-05-02",
-                            "mirror-2026-05-03"}
+    assert deleted_tags == {
+        "mirror-2026-05-01",
+        "mirror-2026-05-02",
+        "mirror-2026-05-03",
+    }
 
 
 def test_bootstrap_refuses_to_overwrite_without_force(tmp_path):
@@ -94,6 +104,7 @@ def test_bootstrap_refuses_to_overwrite_without_force(tmp_path):
 
 def test_publish_requires_existing_db(tmp_path):
     import pytest
+
     with pytest.raises(snapshot.SnapshotError, match="does not exist"):
         snapshot.publish(tmp_path / "nope.sqlite", gh_run=lambda *a, **k: "")
 
@@ -101,8 +112,10 @@ def test_publish_requires_existing_db(tmp_path):
 def test_bootstrap_force_overwrites_and_is_atomic(tmp_path):
     # Build a real compressed snapshot to "download".
     src = db.connect(tmp_path / "src.sqlite")
-    src.execute("INSERT INTO runs (run_id, kind, started_at)"
-                " VALUES ('r1', 'sync', '2026-06-12T00:00:00Z')")
+    src.execute(
+        "INSERT INTO runs (run_id, kind, started_at)"
+        " VALUES ('r1', 'sync', '2026-06-12T00:00:00Z')"
+    )
     src.commit()
     src.close()
     plain = tmp_path / "plain.sqlite"

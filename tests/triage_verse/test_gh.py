@@ -84,9 +84,9 @@ def test_gh_graphql_sends_payload_and_unwraps_data(monkeypatch):
 
 def test_gh_graphql_raises_on_errors(monkeypatch):
     monkeypatch.setattr(
-        gh, "run_gh",
-        lambda args, **kw: json.dumps({"data": None,
-                                       "errors": [{"message": "boom"}]}),
+        gh,
+        "run_gh",
+        lambda args, **kw: json.dumps({"data": None, "errors": [{"message": "boom"}]}),
     )
     with pytest.raises(gh.GhError, match="boom"):
         gh.gh_graphql("query { n }", {})

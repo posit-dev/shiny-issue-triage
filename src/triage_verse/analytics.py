@@ -34,14 +34,16 @@ def _issue_stamps(con: sqlite3.Connection, repo: str | None):
     where = "WHERE is_pr=0" + (" AND repo=:repo" if repo else "")
     rows = con.execute(
         f"SELECT created_at, closed_at FROM issues {where}",
-        {"repo": repo} if repo else {}).fetchall()
+        {"repo": repo} if repo else {},
+    ).fetchall()
     created = sorted(r["created_at"] for r in rows)
     closed = sorted(r["closed_at"] for r in rows if r["closed_at"])
     return created, closed
 
 
-def weekly_open_counts(con: sqlite3.Connection, *, repo: str | None = None,
-                       as_of: str | None = None) -> list[dict]:
+def weekly_open_counts(
+    con: sqlite3.Connection, *, repo: str | None = None, as_of: str | None = None
+) -> list[dict]:
     """Open-issue count measured at 00:00 UTC at the START of each Monday.
 
     An issue created later that same Monday first appears in the FOLLOWING
@@ -55,8 +57,7 @@ def weekly_open_counts(con: sqlite3.Connection, *, repo: str | None = None,
     series = []
     for monday in _mondays(created[0], end):
         boundary = monday.isoformat() + "T00:00:00Z"
-        open_count = (bisect_right(created, boundary)
-                      - bisect_right(closed, boundary))
+        open_count = bisect_right(created, boundary) - bisect_right(closed, boundary)
         year, week, _ = monday.isocalendar()
         series.append({"week": f"{year}-W{week:02d}", "open": open_count})
     return series
@@ -76,19 +77,25 @@ def weekly_flux(con: sqlite3.Connection, *, repo: str | None = None) -> list[dic
     return sorted(counts.values(), key=lambda f: f["week"])
 
 
-def close_reason_mix(con: sqlite3.Connection, *,
-                     repo: str | None = None) -> dict[str, int]:
+def close_reason_mix(
+    con: sqlite3.Connection, *, repo: str | None = None
+) -> dict[str, int]:
     where = "WHERE is_pr=0 AND state='CLOSED'" + (" AND repo=:repo" if repo else "")
     rows = con.execute(
         f"SELECT COALESCE(state_reason, 'UNSPECIFIED') AS reason,"
         f" COUNT(*) AS n FROM issues {where} GROUP BY reason",
-        {"repo": repo} if repo else {}).fetchall()
+        {"repo": repo} if repo else {},
+    ).fetchall()
     return {r["reason"]: r["n"] for r in rows}
 
 
 def export(con: sqlite3.Connection, out_path: str | pathlib.Path) -> None:
-    repos = [r["repo"] for r in con.execute(
-        "SELECT DISTINCT repo FROM issues WHERE is_pr=0 ORDER BY repo")]
+    repos = [
+        r["repo"]
+        for r in con.execute(
+            "SELECT DISTINCT repo FROM issues WHERE is_pr=0 ORDER BY repo"
+        )
+    ]
     payload = {
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "totals": {

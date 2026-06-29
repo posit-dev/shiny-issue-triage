@@ -12,7 +12,7 @@ dependencies = [
 triage-verse = "triage_verse.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "ruff>=0.6", "pyright>=1.1.380"]
 
 [build-system]
 requires = ["uv_build>=0.8,<2"]
@@ -20,3 +20,11 @@ build-backend = "uv_build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.pyright]
+include = ["src"]
+pythonVersion = "3.11"

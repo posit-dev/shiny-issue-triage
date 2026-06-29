@@ -34,18 +34,26 @@ class ResolveLabelSpecsTest(unittest.TestCase):
         self.assertIn("ai-triage:needs-review", names)
         self.assertIn("ai-generated-issue", names)
 
-        priority = next(entry for entry in specs if entry["name"] == "Priority: Critical")
+        priority = next(
+            entry for entry in specs if entry["name"] == "Priority: Critical"
+        )
         self.assertEqual(priority["color"], "C90000")
         self.assertIn("Production-breaking", priority["description"])
 
-        classification = next(entry for entry in specs if entry["name"] == "needs reprex")
+        classification = next(
+            entry for entry in specs if entry["name"] == "needs reprex"
+        )
         self.assertEqual(classification["color"], "1D76DB")
         self.assertIn("Missing runnable minimal code", classification["description"])
 
-        review = next(entry for entry in specs if entry["name"] == "ai-triage:needs-review")
+        review = next(
+            entry for entry in specs if entry["name"] == "ai-triage:needs-review"
+        )
         self.assertEqual(review["color"], "FBCA04")
 
-        reporting = next(entry for entry in specs if entry["name"] == "ai-generated-issue")
+        reporting = next(
+            entry for entry in specs if entry["name"] == "ai-generated-issue"
+        )
         self.assertEqual(reporting["color"], "0E8A16")
 
 

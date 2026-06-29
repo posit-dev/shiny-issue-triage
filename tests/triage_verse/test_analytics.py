@@ -16,7 +16,8 @@ def _seed(con):
             "INSERT INTO issues (repo, number, title, state, state_reason,"
             " created_at, updated_at, closed_at)"
             " VALUES ('rstudio/shiny', ?, 't', ?, ?, ?, ?, ?)",
-            (number, state, reason, created, created, closed))
+            (number, state, reason, created, created, closed),
+        )
     con.commit()
 
 
@@ -94,7 +95,8 @@ def test_weekly_flux_same_week_open_and_close(tmp_path):
         "INSERT INTO issues (repo, number, title, state, state_reason,"
         " created_at, updated_at, closed_at)"
         " VALUES ('rstudio/shiny', 1, 't', 'CLOSED', 'COMPLETED',"
-        " '2026-03-02T09:00:00Z', '2026-03-04T09:00:00Z', '2026-03-04T09:00:00Z')")
+        " '2026-03-02T09:00:00Z', '2026-03-04T09:00:00Z', '2026-03-04T09:00:00Z')"
+    )
     con.commit()
 
     flux = analytics.weekly_flux(con)

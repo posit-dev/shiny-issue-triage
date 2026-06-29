@@ -7,30 +7,48 @@ import subprocess
 import time
 from typing import Any, Callable
 
-RETRYABLE_MARKERS = ("rate limit", "HTTP 429", "HTTP 502", "HTTP 503",
-                     "HTTP 504", "timeout")
+RETRYABLE_MARKERS = (
+    "rate limit",
+    "HTTP 429",
+    "HTTP 502",
+    "HTTP 503",
+    "HTTP 504",
+    "timeout",
+)
 
 
 class GhError(RuntimeError):
     pass
 
 
-def run_gh(args: list[str], *, input: str | None = None, retries: int = 5,
-           sleep: Callable[[float], None] = time.sleep) -> str:
+def run_gh(
+    args: list[str],
+    *,
+    input: str | None = None,
+    retries: int = 5,
+    sleep: Callable[[float], None] = time.sleep,
+) -> str:
     delay = 30.0
     last_error = "gh failed"
     for attempt in range(retries):
         try:
-            proc = subprocess.run(["gh", *args], capture_output=True,
-                                  text=True, encoding="utf-8", input=input)
+            proc = subprocess.run(
+                ["gh", *args],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                input=input,
+            )
         except FileNotFoundError:
-            raise GhError("gh binary not found — install the GitHub CLI"
-                          " (https://cli.github.com)") from None
+            raise GhError(
+                "gh binary not found — install the GitHub CLI (https://cli.github.com)"
+            ) from None
         if proc.returncode == 0:
             return proc.stdout
         last_error = proc.stderr.strip() or f"gh exited {proc.returncode}"
-        retryable = any(marker.lower() in last_error.lower()
-                        for marker in RETRYABLE_MARKERS)
+        retryable = any(
+            marker.lower() in last_error.lower() for marker in RETRYABLE_MARKERS
+        )
         if not retryable:
             raise GhError(last_error)
         if attempt < retries - 1:
