@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pathlib
 from dataclasses import dataclass
+from typing import Any
 
 import yaml
 
@@ -55,7 +56,7 @@ class ModelsConfig:
     pricing: dict[str, dict[str, float]]
 
 
-def _stage(d: dict) -> StageConfig:  # type: ignore[type-arg]
+def _stage(d: dict[str, Any]) -> StageConfig:
     return StageConfig(
         model=d["model"],
         max_tokens=d["max_tokens"],
