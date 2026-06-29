@@ -43,35 +43,33 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Python
-        uses: actions/setup-python@v6.2.0
+      - name: 🚀 Install uv
+        uses: astral-sh/setup-uv@v8.1.0
         with:
           python-version: '3.13'
 
-      - name: Set up Node.js
+      - name: 🟢 Set up Node.js
         uses: actions/setup-node@v6.4.0
         with:
           node-version: '24'
 
-      - name: Install Python dependencies
-        run: python -m pip install --upgrade pip pyyaml
+      - name: 📦 Install the project
+        run: uv sync
 
-      - name: Validate YAML
-        run: python .github/triage/scripts/validate-yaml.py
+      - name: 📐 Check formatting and lint
+        run: make py-check-format
 
-      - name: Run Python checks
-        run: |
-          python -m py_compile \
-            .github/triage/scripts/resolve-repositories.py \
-            .github/triage/scripts/resolve-label-specs.py \
-            .github/triage/scripts/check-engine-guardrails.py
-          python -m unittest tests.test_resolve_label_specs -v
+      - name: 📝 Check types
+        run: make py-check-types
 
-      - name: Run Node checks
-        run: |
-          node --check .github/triage/scripts/create-github-app-token-map.mjs
-          node --check .github/triage/scripts/gh-token-router.mjs
-          node --check .github/triage/scripts/gh-aw-output-adapter.mjs
-          node --check .github/triage/scripts/dry-run-triage-actions.mjs
-          node --check .github/triage/scripts/process-triage-actions.mjs
-          node --test tests/test_process_triage_actions.mjs tests/test_gh_token_router.mjs tests/test_gh_aw_output_adapter.mjs tests/test_dry_run_triage_actions.mjs
+      - name: 🧪 Run Python tests
+        run: make py-check-tests
+
+      - name: 🧾 Validate triage YAML
+        run: make validate-yaml
+
+      - name: 🐍 Compile triage scripts
+        run: make compile-scripts
+
+      - name: 🟨 Run Node checks
+        run: make js-check
