@@ -31,7 +31,7 @@ def test_embed_repo_embeds_changed_issues_only(tmp_path):
 def test_embed_repo_skips_prs(tmp_path):
     con = db.connect(tmp_path / "m.sqlite")
     _seed_issue(con, "r/r", 5, "a pr", "diff", is_pr=1)
-    assert embed.embed_repo(con, "r/r", emb := embed.FakeEmbedder(dim=db.VEC_DIM)) == 0  # noqa: F841
+    assert embed.embed_repo(con, "r/r", embed.FakeEmbedder(dim=db.VEC_DIM)) == 0
 
 
 def test_fake_embedder_is_deterministic_and_right_dim():

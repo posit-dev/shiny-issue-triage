@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 import struct
 from typing import Protocol
 
@@ -48,7 +49,9 @@ def embed_hash(title: str, body: str | None) -> str:
     return hashlib.sha256((title + "\n" + (body or "")).encode("utf-8")).hexdigest()
 
 
-def embed_repo(con, repo: str, embedder: Embedder, *, full: bool = False) -> int:
+def embed_repo(
+    con: sqlite3.Connection, repo: str, embedder: Embedder, *, full: bool = False
+) -> int:
     rows = con.execute(
         "SELECT number, title, body FROM issues WHERE repo=? AND is_pr=0", (repo,)
     ).fetchall()
