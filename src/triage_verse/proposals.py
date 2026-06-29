@@ -41,14 +41,17 @@ def build(con, run_id: str) -> list[dict]:
             )
 
     dup_rows = con.execute(
-        "SELECT * FROM dedup_verdicts WHERE run_id=? AND verdict='duplicate'", (run_id,)
+        "SELECT d.*, i.updated_at AS issue_updated_at FROM dedup_verdicts d "
+        "JOIN issues i ON i.repo=d.repo_a AND i.number=d.number_a "
+        "WHERE d.run_id=? AND d.verdict='duplicate'",
+        (run_id,),
     ).fetchall()
     for d in dup_rows:
         repo, num = d["repo_a"], d["number_a"]
         base = {
             "repo": repo,
             "issue": num,
-            "issue_updated_at": None,
+            "issue_updated_at": d["issue_updated_at"],
             "run_id": run_id,
             "model": d["model"],
             "confidence": d["confidence"],
