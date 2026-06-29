@@ -11,6 +11,7 @@ def test_vector_upsert_and_hash(tmp_path):
     db.upsert_vector(con, "r/r", 1, "h2", vec)
     assert db.get_embed_hash(con, "r/r", 1) == "h2"
     assert con.execute("SELECT COUNT(*) FROM issue_vectors").fetchone()[0] == 1
+    assert con.execute("SELECT COUNT(*) FROM vec_issues").fetchone()[0] == 1
 
 
 def test_knn_orders_by_cosine_distance(tmp_path):
