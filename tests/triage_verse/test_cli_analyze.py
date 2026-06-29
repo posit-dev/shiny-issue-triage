@@ -9,8 +9,6 @@ from triage_verse import llm
 
 
 def test_cli_analyze_invokes_pipeline(tmp_path, monkeypatch):
-    cfg_repos = tmp_path / "repos.yaml"
-    cfg_repos.write_text("repositories:\n  - rstudio/shinytest2\n")
     captured = {}
 
     def fake_analyze(con, cfg, **kw):
@@ -57,3 +55,38 @@ def _models_yaml(tmp_path):
         "spend: {batch_only: true, max_usd_per_day: 50, pricing: {}}\n"
     )
     return p
+
+
+def test_cli_embed_invokes_embed_repo(tmp_path, monkeypatch):
+    from triage_verse import embed as embed_mod
+
+    cfg_repos = tmp_path / "repos.yaml"
+    cfg_repos.write_text("repositories:\n  - rstudio/shinytest2\n")
+    monkeypatch.setattr(embed_mod, "FastEmbedEmbedder", lambda *a, **k: object())
+    calls = []
+    monkeypatch.setattr(
+        embed_mod,
+        "embed_repo",
+        lambda con, repo, embedder, **kw: calls.append(repo) or 3,
+    )
+    rc = cli.main(
+        [
+            "embed",
+            "--db",
+            str(tmp_path / "m.sqlite"),
+            "--config",
+            str(cfg_repos),
+            "--models-config",
+            str(_models_yaml(tmp_path)),
+        ]
+    )
+    assert rc == 0
+    assert calls == ["rstudio/shinytest2"]
+
+
+def test_cli_analyze_status_runs(tmp_path):
+    from triage_verse import db
+
+    db.connect(tmp_path / "m.sqlite").close()
+    rc = cli.main(["analyze-status", "--db", str(tmp_path / "m.sqlite")])
+    assert rc == 0
