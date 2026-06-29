@@ -71,9 +71,56 @@ CREATE TABLE IF NOT EXISTS spend (
   usd REAL NOT NULL DEFAULT 0,
   at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS classifications (
+  repo TEXT NOT NULL,
+  number INTEGER NOT NULL,
+  clf_hash TEXT NOT NULL,
+  type TEXT NOT NULL,
+  priority TEXT NOT NULL,
+  assessment TEXT NOT NULL,
+  labels_json TEXT NOT NULL DEFAULT '[]',
+  close_candidate_json TEXT,
+  confidence REAL NOT NULL,
+  model TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  at TEXT NOT NULL,
+  PRIMARY KEY (repo, number)
+);
+CREATE TABLE IF NOT EXISTS dedup_verdicts (
+  repo_a TEXT NOT NULL, number_a INTEGER NOT NULL,
+  repo_b TEXT NOT NULL, number_b INTEGER NOT NULL,
+  hash_a TEXT NOT NULL, hash_b TEXT NOT NULL,
+  verdict TEXT NOT NULL,
+  canonical_json TEXT,
+  cross_repo_option TEXT,
+  confidence REAL NOT NULL,
+  rationale TEXT NOT NULL,
+  model TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  at TEXT NOT NULL,
+  PRIMARY KEY (repo_a, number_a, repo_b, number_b)
+);
+CREATE TABLE IF NOT EXISTS batches (
+  batch_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  stage TEXT NOT NULL,
+  provider_batch_id TEXT,
+  status TEXT NOT NULL,
+  request_count INTEGER NOT NULL DEFAULT 0,
+  submitted_at TEXT,
+  ended_at TEXT,
+  error TEXT
+);
+CREATE TABLE IF NOT EXISTS batch_items (
+  batch_id TEXT NOT NULL,
+  custom_id TEXT NOT NULL,
+  target_json TEXT NOT NULL,
+  PRIMARY KEY (batch_id, custom_id)
+);
 CREATE INDEX IF NOT EXISTS idx_issues_updated ON issues(repo, updated_at);
 CREATE INDEX IF NOT EXISTS idx_comments_issue ON comments(repo, issue_number);
 CREATE INDEX IF NOT EXISTS idx_spend_run ON spend(run_id);
+CREATE INDEX IF NOT EXISTS idx_batches_open ON batches(status);
 """
 
 ISSUE_COLUMNS = (
@@ -200,3 +247,143 @@ def finish_run(con: sqlite3.Connection, run_id: str, summary: dict) -> None:
         (_now(), json.dumps(summary), run_id),
     )
     con.commit()
+
+
+CLASSIFICATION_COLUMNS = (
+    "repo",
+    "number",
+    "clf_hash",
+    "type",
+    "priority",
+    "assessment",
+    "labels_json",
+    "close_candidate_json",
+    "confidence",
+    "model",
+    "run_id",
+    "at",
+)
+DEDUP_COLUMNS = (
+    "repo_a",
+    "number_a",
+    "repo_b",
+    "number_b",
+    "hash_a",
+    "hash_b",
+    "verdict",
+    "canonical_json",
+    "cross_repo_option",
+    "confidence",
+    "rationale",
+    "model",
+    "run_id",
+    "at",
+)
+
+
+def upsert_classification(con: sqlite3.Connection, row: dict) -> None:
+    _upsert(con, "classifications", CLASSIFICATION_COLUMNS, ("repo", "number"), row)
+
+
+def get_classification(
+    con: sqlite3.Connection, repo: str, number: int
+) -> sqlite3.Row | None:
+    return con.execute(
+        "SELECT * FROM classifications WHERE repo=? AND number=?", (repo, number)
+    ).fetchone()
+
+
+def upsert_dedup_verdict(con: sqlite3.Connection, row: dict) -> None:
+    _upsert(
+        con,
+        "dedup_verdicts",
+        DEDUP_COLUMNS,
+        ("repo_a", "number_a", "repo_b", "number_b"),
+        row,
+    )
+
+
+def get_dedup_verdict(
+    con: sqlite3.Connection, repo_a: str, number_a: int, repo_b: str, number_b: int
+) -> sqlite3.Row | None:
+    return con.execute(
+        "SELECT * FROM dedup_verdicts WHERE repo_a=? AND number_a=? AND repo_b=? AND number_b=?",
+        (repo_a, number_a, repo_b, number_b),
+    ).fetchone()
+
+
+def insert_batch(
+    con: sqlite3.Connection,
+    batch_id: str,
+    run_id: str,
+    stage: str,
+    provider_batch_id: str,
+    request_count: int,
+) -> None:
+    con.execute(
+        "INSERT INTO batches (batch_id, run_id, stage, provider_batch_id, status,"
+        " request_count, submitted_at) VALUES (?, ?, ?, ?, 'submitted', ?, ?)",
+        (batch_id, run_id, stage, provider_batch_id, request_count, _now()),
+    )
+
+
+def set_batch(con: sqlite3.Connection, batch_id: str, **fields: object) -> None:
+    cols = ", ".join(f"{k}=?" for k in fields)
+    con.execute(
+        f"UPDATE batches SET {cols} WHERE batch_id=?",
+        (*fields.values(), batch_id),
+    )
+
+
+def open_batches(con: sqlite3.Connection) -> list[sqlite3.Row]:
+    return con.execute(
+        "SELECT * FROM batches WHERE status='submitted' ORDER BY submitted_at"
+    ).fetchall()
+
+
+def run_batches(con: sqlite3.Connection, run_id: str) -> list[sqlite3.Row]:
+    return con.execute(
+        "SELECT * FROM batches WHERE run_id=? ORDER BY submitted_at", (run_id,)
+    ).fetchall()
+
+
+def insert_batch_items(
+    con: sqlite3.Connection, batch_id: str, items: dict[str, str]
+) -> None:
+    con.executemany(
+        "INSERT INTO batch_items (batch_id, custom_id, target_json) VALUES (?, ?, ?)",
+        [(batch_id, cid, tgt) for cid, tgt in items.items()],
+    )
+
+
+def get_batch_items(con: sqlite3.Connection, batch_id: str) -> dict[str, str]:
+    rows = con.execute(
+        "SELECT custom_id, target_json FROM batch_items WHERE batch_id=?", (batch_id,)
+    ).fetchall()
+    return {r["custom_id"]: r["target_json"] for r in rows}
+
+
+def insert_spend(
+    con: sqlite3.Connection,
+    run_id: str,
+    stage: str,
+    model: str,
+    input_tokens: int,
+    cached_tokens: int,
+    output_tokens: int,
+    usd: float,
+) -> None:
+    con.execute(
+        "INSERT INTO spend (run_id, stage, model, input_tokens, cached_tokens,"
+        " output_tokens, usd, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (run_id, stage, model, input_tokens, cached_tokens, output_tokens, usd, _now()),
+    )
+
+
+def today_spend_usd(con: sqlite3.Connection) -> float:
+    day = _now()[:10]
+    row = con.execute(
+        "SELECT COALESCE(SUM(usd), 0.0) AS total FROM spend WHERE at >= ?",
+        (day + "T00:00:00Z",),
+    ).fetchone()
+    return float(row["total"])
