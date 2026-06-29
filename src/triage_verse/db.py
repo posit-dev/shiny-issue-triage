@@ -166,6 +166,8 @@ _CURSOR_KINDS = {
     "comments": "comments_cursor",
 }
 
+_BATCH_MUTABLE = frozenset({"status", "ended_at", "error", "provider_batch_id"})
+
 
 def connect(path: str | pathlib.Path) -> sqlite3.Connection:
     con = sqlite3.connect(path)
@@ -328,6 +330,11 @@ def insert_batch(
 
 
 def set_batch(con: sqlite3.Connection, batch_id: str, **fields: object) -> None:
+    if not fields:
+        raise ValueError("set_batch requires at least one field to update")
+    unknown = set(fields) - _BATCH_MUTABLE
+    if unknown:
+        raise ValueError(f"set_batch got unknown field(s): {sorted(unknown)}")
     cols = ", ".join(f"{k}=?" for k in fields)
     con.execute(
         f"UPDATE batches SET {cols} WHERE batch_id=?",

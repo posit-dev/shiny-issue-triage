@@ -1,4 +1,5 @@
 # tests/triage_verse/test_db_analysis.py
+import pytest
 from triage_verse import db
 
 
@@ -88,3 +89,14 @@ def test_spend_and_today_total(tmp_path):
     db.insert_spend(con, "run1", "classify", "claude-haiku-4-5", 1000, 0, 200, 0.0015)
     db.insert_spend(con, "run1", "dedup", "claude-sonnet-4-6", 2000, 0, 300, 0.0052)
     assert round(db.today_spend_usd(con), 4) == 0.0067
+
+
+def test_set_batch_rejects_unknown_and_empty(tmp_path):
+    con = _con(tmp_path)
+    db.insert_batch(con, "b1", "run1", "classify", "prov1", 1)
+    with pytest.raises(ValueError):
+        db.set_batch(con, "b1")
+    with pytest.raises(ValueError):
+        db.set_batch(con, "b1", bogus_column="x")
+    db.set_batch(con, "b1", status="collected")  # allowed field still works
+    assert db.open_batches(con) == []
