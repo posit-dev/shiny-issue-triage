@@ -16,7 +16,7 @@ Items surfaced during P1 execution (subagent-driven, 2026-06-12) that are **not 
 
 ## Low-priority code cleanups (safe to defer)
 
-4. **No linter/type-checker configured.** A couple of spots would benefit once `ruff` + a type checker are added: `cli.py`'s `_open_db` return hint is the string `"db.sqlite3.Connection"` (resolves correctly but is unusual — should become `sqlite3.Connection` with a direct import); `sync_all`'s `-> dict` could be `-> dict[str, int]`. Adding `ruff` to the dev group and a CI step is a reasonable small follow-up task on its own.
+4. **~~No linter/type-checker configured.~~ DONE.** `ruff` (lint + format) and `pyright` are now dev deps, wired through the Makefile (`make py-check-format` / `py-check-types`) and CI; both pass clean. The codebase was reformatted to ruff style. The two cosmetic hints noted earlier (`cli.py`'s `"db.sqlite3.Connection"` string return hint; `sync_all`'s bare `-> dict`) are accepted by pyright as-is, so they're optional polish, not required.
 
 5. **`_prune_dated` hardcodes `--limit 100`** for `gh release list`. Fine while `keep=8` (the list stays tiny), but undocumented. A one-line comment or deriving the limit from `keep` would future-proof it if snapshot retention is ever raised substantially.
 
