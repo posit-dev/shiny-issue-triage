@@ -78,8 +78,8 @@ CLASSIFY_SCHEMA = {
 }
 
 
-def clf_hash(title: str, body: str, comments: list[str]) -> str:
-    payload = (title or "") + (body or "") + "".join(comments)
+def clf_hash(title: str, body: str | None, comments: list[str]) -> str:
+    payload = "\x1f".join([title or "", body or "", *comments])
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 

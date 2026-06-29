@@ -51,6 +51,36 @@ def test_store_drops_unknown_labels(tmp_path):
     assert json.loads(row["labels_json"]) == ["needs reprex"]
 
 
+def test_clf_hash_no_field_collision():
+    # different title/body split must not collide
+    assert classify.clf_hash("ab", "c", []) != classify.clf_hash("a", "bc", [])
+    # different comment grouping must not collide
+    assert classify.clf_hash("t", "b", ["a", "b"]) != classify.clf_hash(
+        "t", "b", ["ab"]
+    )
+
+
+def test_parse_returns_none_on_errored_result():
+    from triage_verse import llm
+
+    assert (
+        classify.parse(llm.BatchResult("x", "errored", error="invalid_request")) is None
+    )
+
+
+def test_parse_returns_none_on_bad_json():
+    from triage_verse import llm
+
+    class _Block:
+        type = "text"
+        text = "not json{"
+
+    class _Msg:
+        content = [_Block()]
+
+    assert classify.parse(llm.BatchResult("x", "succeeded", message=_Msg())) is None
+
+
 def _cfg():
     return config.ModelsConfig(
         "m",
