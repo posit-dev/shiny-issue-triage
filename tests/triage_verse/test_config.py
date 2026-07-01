@@ -25,12 +25,17 @@ def test_load_repos_rejects_malformed_entry(tmp_path):
         load_repos(cfg)
 
 
-def test_checked_in_config_is_pilot_trio():
+def test_checked_in_config_is_active_pilot_scope():
     repos = load_repos(REPO_ROOT / "config" / "repos.yaml")
 
     fulls = [r.full for r in repos]
     assert len(fulls) == len(set(fulls))
-    assert fulls == ["rstudio/reactlog", "rstudio/shinytest2", "posit-dev/py-shinylive"]
+    assert fulls == [
+        "rstudio/reactlog",
+        "rstudio/shinytest2",
+        "posit-dev/py-shinylive",
+        "rstudio/promises",
+    ]
 
 
 def test_checked_in_config_keeps_fleet_ready_to_uncomment():

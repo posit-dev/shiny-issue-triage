@@ -1,0 +1,29 @@
+backend: claude_cli   # claude_cli (uses `claude -p`, no API key) | anthropic_batch (needs ANTHROPIC_API_KEY)
+embedding:
+  model: sentence-transformers/all-MiniLM-L6-v2
+  dim: 384
+  candidate_top_k: 10
+  cosine_threshold: 0.80
+stages:
+  classify: { model: claude-haiku-4-5, max_tokens: 512 }
+  recheck:  { model: claude-sonnet-5,  max_tokens: 1024, confidence_floor: 0.70 }
+  dedup:    { model: claude-sonnet-5,  max_tokens: 1024 }
+batch:
+  max_requests_per_batch: 500
+  poll_interval_seconds: 30
+  workers: 2   # concurrent `claude -p` calls under backend: claude_cli; ignored by anthropic_batch
+spend:
+  batch_only: true
+  # Under backend: claude_cli, each `claude -p` call executes and bills
+  # synchronously inside submit(); analyze._submit_stage chunks at size 1 and
+  # collects immediately for this backend, so this cap is checked before
+  # every item -- enforced within a single stage as well as between
+  # stages/runs. Use --limit to additionally bound one run's spend.
+  max_usd_per_day: 50
+  pricing:
+    claude-haiku-4-5: { input: 0.50, cached: 0.05, output: 2.50 }
+    # claude-sonnet-5 rates carried over from claude-sonnet-4-6 (UNVERIFIED for
+    # Sonnet 5 — confirm real batch pricing before enabling backend:
+    # anthropic_batch; see issue #18). Not load-bearing for backend: claude_cli,
+    # which meters from each call's reported total_cost_usd instead.
+    claude-sonnet-5: { input: 1.50, cached: 0.15, output: 7.50 }

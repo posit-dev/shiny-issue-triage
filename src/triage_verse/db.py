@@ -8,6 +8,10 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 
+import sqlite_vec
+
+VEC_DIM = 384
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS repos (
   repo TEXT PRIMARY KEY,
@@ -71,9 +75,64 @@ CREATE TABLE IF NOT EXISTS spend (
   usd REAL NOT NULL DEFAULT 0,
   at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS classifications (
+  repo TEXT NOT NULL,
+  number INTEGER NOT NULL,
+  clf_hash TEXT NOT NULL,
+  type TEXT NOT NULL,
+  priority TEXT NOT NULL,
+  assessment TEXT NOT NULL,
+  labels_json TEXT NOT NULL DEFAULT '[]',
+  close_candidate_json TEXT,
+  confidence REAL NOT NULL,
+  model TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  at TEXT NOT NULL,
+  PRIMARY KEY (repo, number)
+);
+CREATE TABLE IF NOT EXISTS dedup_verdicts (
+  repo_a TEXT NOT NULL, number_a INTEGER NOT NULL,
+  repo_b TEXT NOT NULL, number_b INTEGER NOT NULL,
+  hash_a TEXT NOT NULL, hash_b TEXT NOT NULL,
+  verdict TEXT NOT NULL,
+  canonical_json TEXT,
+  cross_repo_option TEXT,
+  confidence REAL NOT NULL,
+  rationale TEXT NOT NULL,
+  model TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  at TEXT NOT NULL,
+  PRIMARY KEY (repo_a, number_a, repo_b, number_b)
+);
+CREATE TABLE IF NOT EXISTS batches (
+  batch_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  stage TEXT NOT NULL,
+  provider_batch_id TEXT,
+  status TEXT NOT NULL,
+  request_count INTEGER NOT NULL DEFAULT 0,
+  submitted_at TEXT,
+  ended_at TEXT,
+  error TEXT
+);
+CREATE TABLE IF NOT EXISTS batch_items (
+  batch_id TEXT NOT NULL,
+  custom_id TEXT NOT NULL,
+  target_json TEXT NOT NULL,
+  PRIMARY KEY (batch_id, custom_id)
+);
 CREATE INDEX IF NOT EXISTS idx_issues_updated ON issues(repo, updated_at);
 CREATE INDEX IF NOT EXISTS idx_comments_issue ON comments(repo, issue_number);
 CREATE INDEX IF NOT EXISTS idx_spend_run ON spend(run_id);
+CREATE INDEX IF NOT EXISTS idx_batches_open ON batches(status);
+CREATE TABLE IF NOT EXISTS issue_vectors (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  repo TEXT NOT NULL,
+  number INTEGER NOT NULL,
+  embed_hash TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (repo, number)
+);
 """
 
 ISSUE_COLUMNS = (
@@ -119,12 +178,27 @@ _CURSOR_KINDS = {
     "comments": "comments_cursor",
 }
 
+_BATCH_MUTABLE = frozenset({"status", "ended_at", "error", "provider_batch_id"})
+
 
 def connect(path: str | pathlib.Path) -> sqlite3.Connection:
     con = sqlite3.connect(path)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
+    try:
+        con.enable_load_extension(True)
+    except AttributeError as exc:  # system Python built without extension loading
+        raise RuntimeError(
+            "this Python's sqlite3 lacks extension-loading support; run under the "
+            "uv-managed interpreter (`uv run`)"
+        ) from exc
+    sqlite_vec.load(con)
+    con.enable_load_extension(False)
     con.executescript(SCHEMA)
+    con.execute(
+        f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_issues "
+        f"USING vec0(embedding float[{VEC_DIM}] distance_metric=cosine)"
+    )
     return con
 
 
@@ -200,3 +274,208 @@ def finish_run(con: sqlite3.Connection, run_id: str, summary: dict) -> None:
         (_now(), json.dumps(summary), run_id),
     )
     con.commit()
+
+
+CLASSIFICATION_COLUMNS = (
+    "repo",
+    "number",
+    "clf_hash",
+    "type",
+    "priority",
+    "assessment",
+    "labels_json",
+    "close_candidate_json",
+    "confidence",
+    "model",
+    "run_id",
+    "at",
+)
+DEDUP_COLUMNS = (
+    "repo_a",
+    "number_a",
+    "repo_b",
+    "number_b",
+    "hash_a",
+    "hash_b",
+    "verdict",
+    "canonical_json",
+    "cross_repo_option",
+    "confidence",
+    "rationale",
+    "model",
+    "run_id",
+    "at",
+)
+
+
+def upsert_classification(con: sqlite3.Connection, row: dict) -> None:
+    _upsert(con, "classifications", CLASSIFICATION_COLUMNS, ("repo", "number"), row)
+
+
+def get_classification(
+    con: sqlite3.Connection, repo: str, number: int
+) -> sqlite3.Row | None:
+    return con.execute(
+        "SELECT * FROM classifications WHERE repo=? AND number=?", (repo, number)
+    ).fetchone()
+
+
+def upsert_dedup_verdict(con: sqlite3.Connection, row: dict) -> None:
+    _upsert(
+        con,
+        "dedup_verdicts",
+        DEDUP_COLUMNS,
+        ("repo_a", "number_a", "repo_b", "number_b"),
+        row,
+    )
+
+
+def get_dedup_verdict(
+    con: sqlite3.Connection, repo_a: str, number_a: int, repo_b: str, number_b: int
+) -> sqlite3.Row | None:
+    return con.execute(
+        "SELECT * FROM dedup_verdicts WHERE repo_a=? AND number_a=? AND repo_b=? AND number_b=?",
+        (repo_a, number_a, repo_b, number_b),
+    ).fetchone()
+
+
+def insert_batch(
+    con: sqlite3.Connection,
+    batch_id: str,
+    run_id: str,
+    stage: str,
+    provider_batch_id: str,
+    request_count: int,
+) -> None:
+    con.execute(
+        "INSERT INTO batches (batch_id, run_id, stage, provider_batch_id, status,"
+        " request_count, submitted_at) VALUES (?, ?, ?, ?, 'submitted', ?, ?)",
+        (batch_id, run_id, stage, provider_batch_id, request_count, _now()),
+    )
+
+
+def set_batch(con: sqlite3.Connection, batch_id: str, **fields: object) -> None:
+    if not fields:
+        raise ValueError("set_batch requires at least one field to update")
+    unknown = set(fields) - _BATCH_MUTABLE
+    if unknown:
+        raise ValueError(f"set_batch got unknown field(s): {sorted(unknown)}")
+    cols = ", ".join(f"{k}=?" for k in fields)
+    con.execute(
+        f"UPDATE batches SET {cols} WHERE batch_id=?",
+        (*fields.values(), batch_id),
+    )
+
+
+def open_batches(con: sqlite3.Connection) -> list[sqlite3.Row]:
+    return con.execute(
+        "SELECT * FROM batches WHERE status='submitted' ORDER BY submitted_at"
+    ).fetchall()
+
+
+def run_batches(con: sqlite3.Connection, run_id: str) -> list[sqlite3.Row]:
+    return con.execute(
+        "SELECT * FROM batches WHERE run_id=? ORDER BY submitted_at", (run_id,)
+    ).fetchall()
+
+
+def insert_batch_items(
+    con: sqlite3.Connection, batch_id: str, items: dict[str, str]
+) -> None:
+    con.executemany(
+        "INSERT INTO batch_items (batch_id, custom_id, target_json) VALUES (?, ?, ?)",
+        [(batch_id, cid, tgt) for cid, tgt in items.items()],
+    )
+
+
+def get_batch_items(con: sqlite3.Connection, batch_id: str) -> dict[str, str]:
+    rows = con.execute(
+        "SELECT custom_id, target_json FROM batch_items WHERE batch_id=?", (batch_id,)
+    ).fetchall()
+    return {r["custom_id"]: r["target_json"] for r in rows}
+
+
+def insert_spend(
+    con: sqlite3.Connection,
+    run_id: str,
+    stage: str,
+    model: str,
+    input_tokens: int,
+    cached_tokens: int,
+    output_tokens: int,
+    usd: float,
+) -> None:
+    con.execute(
+        "INSERT INTO spend (run_id, stage, model, input_tokens, cached_tokens,"
+        " output_tokens, usd, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (run_id, stage, model, input_tokens, cached_tokens, output_tokens, usd, _now()),
+    )
+
+
+def today_spend_usd(con: sqlite3.Connection) -> float:
+    day = _now()[:10]
+    row = con.execute(
+        "SELECT COALESCE(SUM(usd), 0.0) AS total FROM spend WHERE at >= ?",
+        (day + "T00:00:00Z",),
+    ).fetchone()
+    return float(row["total"])
+
+
+def upsert_vector(
+    con: sqlite3.Connection,
+    repo: str,
+    number: int,
+    embed_hash: str,
+    vector: list[float],
+) -> None:
+    vector = list(vector)
+    if len(vector) != VEC_DIM:
+        raise ValueError(
+            f"embedding has {len(vector)} dims, expected {VEC_DIM} "
+            f"(vec_issues is float[{VEC_DIM}]); check config embedding.dim"
+        )
+    blob = sqlite_vec.serialize_float32(vector)
+    existing = con.execute(
+        "SELECT id FROM issue_vectors WHERE repo=? AND number=?", (repo, number)
+    ).fetchone()
+    if existing is None:
+        cur = con.execute(
+            "INSERT INTO issue_vectors (repo, number, embed_hash, updated_at)"
+            " VALUES (?, ?, ?, ?)",
+            (repo, number, embed_hash, _now()),
+        )
+        rowid = cur.lastrowid
+    else:
+        rowid = existing["id"]
+        con.execute(
+            "UPDATE issue_vectors SET embed_hash=?, updated_at=? WHERE id=?",
+            (embed_hash, _now(), rowid),
+        )
+        con.execute("DELETE FROM vec_issues WHERE rowid=?", (rowid,))
+    con.execute(
+        "INSERT INTO vec_issues (rowid, embedding) VALUES (?, ?)", (rowid, blob)
+    )
+
+
+def get_embed_hash(con: sqlite3.Connection, repo: str, number: int) -> str | None:
+    row = con.execute(
+        "SELECT embed_hash FROM issue_vectors WHERE repo=? AND number=?", (repo, number)
+    ).fetchone()
+    return row["embed_hash"] if row else None
+
+
+def knn(
+    con: sqlite3.Connection, vector: list[float], k: int
+) -> list[tuple[str, int, float]]:
+    blob = sqlite_vec.serialize_float32(list(vector))
+    hits = con.execute(
+        "SELECT rowid, distance FROM vec_issues WHERE embedding MATCH ? AND k = ?",
+        (blob, k),
+    ).fetchall()
+    out = []
+    for h in hits:
+        ref = con.execute(
+            "SELECT repo, number FROM issue_vectors WHERE id=?", (h["rowid"],)
+        ).fetchone()
+        out.append((ref["repo"], ref["number"], float(h["distance"])))
+    return out

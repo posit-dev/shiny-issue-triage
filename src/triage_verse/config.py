@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pathlib
 from dataclasses import dataclass
+from typing import Any
 
 import yaml
 
@@ -30,3 +31,57 @@ def load_repos(path: str | pathlib.Path) -> list[Repo]:
             raise ValueError(f"invalid repo entry: {entry!r} (expected owner/name)")
         repos.append(Repo(owner, name))
     return repos
+
+
+@dataclass(frozen=True)
+class StageConfig:
+    model: str
+    max_tokens: int
+    confidence_floor: float | None = None
+
+
+@dataclass(frozen=True)
+class ModelsConfig:
+    embed_model: str
+    embed_dim: int
+    candidate_top_k: int
+    cosine_threshold: float
+    classify: StageConfig
+    recheck: StageConfig
+    dedup: StageConfig
+    max_requests_per_batch: int
+    poll_interval_seconds: int
+    batch_only: bool
+    max_usd_per_day: float
+    pricing: dict[str, dict[str, float]]
+    backend: str = "claude_cli"
+    workers: int = 1
+
+
+def _stage(d: dict[str, Any]) -> StageConfig:
+    return StageConfig(
+        model=d["model"],
+        max_tokens=d["max_tokens"],
+        confidence_floor=d.get("confidence_floor"),
+    )
+
+
+def load_models_config(path: str | pathlib.Path) -> ModelsConfig:
+    data = yaml.safe_load(pathlib.Path(path).read_text(encoding="utf-8")) or {}
+    emb, st, b, sp = data["embedding"], data["stages"], data["batch"], data["spend"]
+    return ModelsConfig(
+        embed_model=emb["model"],
+        embed_dim=emb["dim"],
+        candidate_top_k=emb["candidate_top_k"],
+        cosine_threshold=emb["cosine_threshold"],
+        classify=_stage(st["classify"]),
+        recheck=_stage(st["recheck"]),
+        dedup=_stage(st["dedup"]),
+        max_requests_per_batch=b["max_requests_per_batch"],
+        poll_interval_seconds=b["poll_interval_seconds"],
+        batch_only=sp["batch_only"],
+        max_usd_per_day=sp["max_usd_per_day"],
+        pricing=sp["pricing"],
+        backend=data.get("backend", "claude_cli"),
+        workers=b.get("workers", 1),
+    )

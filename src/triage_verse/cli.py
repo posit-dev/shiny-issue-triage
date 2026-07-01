@@ -3,16 +3,23 @@
 from __future__ import annotations
 
 import argparse
+import io
 import pathlib
+import sys
 
 from . import analytics as analytics_mod
+from . import analyze as analyze_mod
 from . import config, db
+from . import embed as embed_mod
+from . import llm
 from . import sync as sync_mod
 from . import snapshot as snapshot_mod
 from . import verify as verify_mod
 
 DEFAULT_DB = ".data/mirror.sqlite"
 DEFAULT_CONFIG = "config/repos.yaml"
+DEFAULT_MODELS = "config/models.yaml"
+DEFAULT_PROPOSALS = ".data/proposals"
 
 
 def _open_db(path: str) -> "db.sqlite3.Connection":
@@ -74,6 +81,55 @@ def _cmd_verify_counts(args: argparse.Namespace) -> int:
     return 1 if bad else 0
 
 
+def _cmd_embed(args: argparse.Namespace) -> int:
+    cfg = config.load_models_config(args.models_config)
+    repos = [r.full for r in config.load_repos(args.config)]
+    if args.repo:
+        repos = [args.repo]
+    con = _open_db(args.db)
+    embedder = embed_mod.FastEmbedEmbedder(cfg.embed_model)
+    total = sum(embed_mod.embed_repo(con, r, embedder, full=args.full) for r in repos)
+    print(f"embedded {total} issues")
+    return 0
+
+
+def _cmd_analyze(args: argparse.Namespace) -> int:
+    cfg = config.load_models_config(args.models_config)
+    con = _open_db(args.db)
+    embedder = embed_mod.FastEmbedEmbedder(cfg.embed_model)
+    summary = analyze_mod.analyze(
+        con,
+        cfg,
+        repo=args.repo,
+        limit=args.limit,
+        full=args.full,
+        wait=args.wait,
+        embedder=embedder,
+        batch_client=llm.make_batch_client(cfg, log=print),
+        rubric_path=".github/triage/issue-triage-rubric.md",
+        labels_path=".github/triage/labels.yaml",
+        proposals_dir=args.proposals_dir,
+        log=print,
+    )
+    print(
+        f"classified={summary['classified']} rechecked={summary['rechecked']} "
+        f"pairs={summary['pairs']} halted_on_budget={summary['halted_on_budget']}"
+    )
+    return 0
+
+
+def _cmd_analyze_status(args: argparse.Namespace) -> int:
+    con = _open_db(args.db)
+    status = analyze_mod.analyze_status(con)
+    print(
+        f"open batches: {len(status['open_batches'])}; "
+        f"today spend: ${status['today_spend_usd']:.4f}"
+    )
+    for b in status["open_batches"]:
+        print(f"  {b['batch_id']} [{b['stage']}] {b['status']}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="triage-verse")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -124,9 +180,39 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_ver.set_defaults(func=_cmd_verify_counts)
 
+    p_embed = sub.add_parser("embed", help="compute/update issue embeddings")
+    p_embed.add_argument("--db", default=DEFAULT_DB)
+    p_embed.add_argument("--config", default=DEFAULT_CONFIG)
+    p_embed.add_argument("--models-config", default=DEFAULT_MODELS)
+    p_embed.add_argument("--repo")
+    p_embed.add_argument("--full", action="store_true")
+    p_embed.set_defaults(func=_cmd_embed)
+
+    p_an = sub.add_parser("analyze", help="classify + dedup -> proposals (Batch API)")
+    p_an.add_argument("--db", default=DEFAULT_DB)
+    p_an.add_argument("--models-config", default=DEFAULT_MODELS)
+    p_an.add_argument("--repo")
+    p_an.add_argument("--limit", type=int)
+    p_an.add_argument("--full", action="store_true")
+    p_an.add_argument("--wait", action="store_true")
+    p_an.add_argument("--proposals-dir", default=DEFAULT_PROPOSALS)
+    p_an.set_defaults(func=_cmd_analyze)
+
+    p_st = sub.add_parser(
+        "analyze-status", help="show in-flight batches and today's spend"
+    )
+    p_st.add_argument("--db", default=DEFAULT_DB)
+    p_st.set_defaults(func=_cmd_analyze_status)
+
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Force line buffering even when stdout is redirected to a file (a
+    # background process, a scheduled job, `> log.txt`, ...), where Python
+    # otherwise defaults to block buffering. Without this, log() output can
+    # sit unflushed for the entire run instead of being tailable live.
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(line_buffering=True)
     args = build_parser().parse_args(argv)
     return args.func(args)
