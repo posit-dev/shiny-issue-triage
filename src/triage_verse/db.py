@@ -222,6 +222,12 @@ def upsert_issue(con: sqlite3.Connection, row: dict) -> None:
     _upsert(con, "issues", ISSUE_COLUMNS, ("repo", "number"), row)
 
 
+def get_issue(con: sqlite3.Connection, repo: str, number: int) -> sqlite3.Row | None:
+    return con.execute(
+        "SELECT * FROM issues WHERE repo=? AND number=?", (repo, number)
+    ).fetchone()
+
+
 def upsert_pr(con: sqlite3.Connection, row: dict) -> None:
     _upsert(con, "prs", PR_COLUMNS, ("repo", "number"), row)
 

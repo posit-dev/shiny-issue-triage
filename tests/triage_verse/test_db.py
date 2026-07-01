@@ -117,3 +117,15 @@ def test_record_run(tmp_path):
     assert row["kind"] == "sync"
     assert row["finished_at"] is not None
     assert '"issues": 3' in row["summary_json"]
+
+
+def test_get_issue_returns_row(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+    db.upsert_issue(con, _issue_row())
+    row = db.get_issue(con, "rstudio/shiny", 1)
+    assert row["title"] == "first"
+
+
+def test_get_issue_missing_returns_none(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+    assert db.get_issue(con, "rstudio/shiny", 999) is None
