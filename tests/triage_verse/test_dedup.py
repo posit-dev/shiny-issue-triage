@@ -19,7 +19,7 @@ def test_build_requests_includes_both_issues(tmp_path):
         con, _stage(), [{"type": "text", "text": "RUBRIC"}], [_pair()]
     )
     assert reqs[0].custom_id == "d0"
-    assert reqs[0].params["model"] == "claude-sonnet-4-6"
+    assert reqs[0].params["model"] == "claude-sonnet-5"
     assert "r/a#1" in reqs[0].params["messages"][0]["content"]
     assert "r/b#2" in reqs[0].params["messages"][0]["content"]
 
@@ -36,7 +36,7 @@ def test_store_persists_canonical_pair(tmp_path):
             "confidence": 0.8,
             "rationale": "same root cause",
         },
-        "claude-sonnet-4-6",
+        "claude-sonnet-5",
         "run1",
     )
     row = db.get_dedup_verdict(con, "r/a", 1, "r/b", 2)
@@ -63,4 +63,4 @@ def test_parse_returns_none_on_bad_json():
 
 
 def _stage():
-    return config.StageConfig("claude-sonnet-4-6", 1024)
+    return config.StageConfig("claude-sonnet-5", 1024)

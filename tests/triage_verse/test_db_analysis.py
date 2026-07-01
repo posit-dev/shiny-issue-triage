@@ -38,7 +38,7 @@ def test_classification_upsert_roundtrip(tmp_path):
             "labels_json": "[]",
             "close_candidate_json": None,
             "confidence": 0.5,
-            "model": "claude-sonnet-4-6",
+            "model": "claude-sonnet-5",
             "run_id": "run1",
             "at": "2026-06-29T01:00:00Z",
         },
@@ -64,7 +64,7 @@ def test_dedup_verdict_roundtrip(tmp_path):
             "cross_repo_option": "close-and-link",
             "confidence": 0.8,
             "rationale": "same",
-            "model": "claude-sonnet-4-6",
+            "model": "claude-sonnet-5",
             "run_id": "run1",
             "at": "2026-06-29T00:00:00Z",
         },
@@ -87,7 +87,7 @@ def test_batch_lifecycle(tmp_path):
 def test_spend_and_today_total(tmp_path):
     con = _con(tmp_path)
     db.insert_spend(con, "run1", "classify", "claude-haiku-4-5", 1000, 0, 200, 0.0015)
-    db.insert_spend(con, "run1", "dedup", "claude-sonnet-4-6", 2000, 0, 300, 0.0052)
+    db.insert_spend(con, "run1", "dedup", "claude-sonnet-5", 2000, 0, 300, 0.0052)
     assert round(db.today_spend_usd(con), 4) == 0.0067
 
 

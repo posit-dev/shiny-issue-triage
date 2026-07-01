@@ -49,8 +49,8 @@ def _models_yaml(tmp_path):
     p.write_text(
         "embedding: {model: m, dim: 384, candidate_top_k: 10, cosine_threshold: 0.8}\n"
         "stages:\n  classify: {model: claude-haiku-4-5, max_tokens: 512}\n"
-        "  recheck: {model: claude-sonnet-4-6, max_tokens: 1024, confidence_floor: 0.7}\n"
-        "  dedup: {model: claude-sonnet-4-6, max_tokens: 1024}\n"
+        "  recheck: {model: claude-sonnet-5, max_tokens: 1024, confidence_floor: 0.7}\n"
+        "  dedup: {model: claude-sonnet-5, max_tokens: 1024}\n"
         "batch: {max_requests_per_batch: 500, poll_interval_seconds: 30}\n"
         "spend: {batch_only: true, max_usd_per_day: 50, pricing: {}}\n"
     )

@@ -14,15 +14,15 @@ def _cfg(cap=50.0):
         10,
         0.80,
         config.StageConfig("claude-haiku-4-5", 512),
-        config.StageConfig("claude-sonnet-4-6", 1024, 0.70),
-        config.StageConfig("claude-sonnet-4-6", 1024),
+        config.StageConfig("claude-sonnet-5", 1024, 0.70),
+        config.StageConfig("claude-sonnet-5", 1024),
         500,
         0,
         True,
         cap,
         {
             "claude-haiku-4-5": {"input": 0.5, "cached": 0.05, "output": 2.5},
-            "claude-sonnet-4-6": {"input": 1.5, "cached": 0.15, "output": 7.5},
+            "claude-sonnet-5": {"input": 1.5, "cached": 0.15, "output": 7.5},
         },
     )
 
@@ -76,7 +76,7 @@ def test_analyze_runs_full_pipeline_and_writes_proposals(tmp_path):
     assert summary["rechecked"] == 1
     assert summary["pairs"] == 1
     assert (
-        db.get_classification(con, "r/a", 1)["model"] == "claude-sonnet-4-6"
+        db.get_classification(con, "r/a", 1)["model"] == "claude-sonnet-5"
     )  # rechecked
     assert db.get_dedup_verdict(con, "r/a", 1, "r/b", 2)["verdict"] == "duplicate"
     assert con.execute("SELECT COUNT(*) FROM spend").fetchone()[0] == 4

@@ -140,7 +140,11 @@ class AnthropicBatchClient:
         return out
 
 
-_MODEL_ALIASES = {"claude-haiku-4-5": "haiku", "claude-sonnet-4-6": "sonnet"}
+# "claude-sonnet-5" maps to itself, not the short "sonnet" alias: on this CLI
+# install, `--model sonnet` still resolves to the older claude-sonnet-4-6
+# (verified empirically), while `--model claude-sonnet-5` correctly reaches
+# the new model. Passing the literal id sidesteps the CLI's alias staleness.
+_MODEL_ALIASES = {"claude-haiku-4-5": "haiku", "claude-sonnet-5": "claude-sonnet-5"}
 _MAX_PROMPT_CHARS = 50_000
 _CLI_TIMEOUT = 300  # seconds; a hung `claude -p` must not block the run forever.
 

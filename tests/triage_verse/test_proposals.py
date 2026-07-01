@@ -24,7 +24,7 @@ def _seed(con):
                 {"reason": "fixed", "rationale": "v1.2", "confidence": 0.95}
             ),
             "confidence": 0.95,
-            "model": "claude-sonnet-4-6",
+            "model": "claude-sonnet-5",
             "run_id": "run1",
             "at": "2026-06-29T00:00:00Z",
         },
@@ -64,7 +64,7 @@ def test_build_emits_close_duplicate_with_freshness(tmp_path):
             "cross_repo_option": "close-and-link",
             "confidence": 0.9,
             "rationale": "same",
-            "model": "claude-sonnet-4-6",
+            "model": "claude-sonnet-5",
             "run_id": "run1",
             "at": "2026-06-29T00:00:00Z",
         },
