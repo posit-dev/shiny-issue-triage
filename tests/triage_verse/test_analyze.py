@@ -3,6 +3,8 @@ import pathlib
 import threading
 import time
 
+import pytest
+
 from triage_verse import analyze, config, db, embed, llm
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -372,6 +374,63 @@ def test_breaker_trips_mid_stage_not_just_between_stages(tmp_path):
     assert summary["classified"] == 2
     assert con.execute("SELECT COUNT(*) FROM classifications").fetchone()[0] == 2
     assert con.execute("SELECT COUNT(*) FROM spend").fetchone()[0] == 2
+
+
+def test_parallel_resume_after_crash_does_not_redo_completed_items(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+    _n_issues(con, 4)
+    cfg = _cfg(workers=2)
+    scripted = {f"c{i}": _clf(0.9) for i in range(4)}
+
+    class _CrashingClient:
+        synchronous = True
+
+        def submit_one(self, request):
+            if request.custom_id == "c2":
+                raise RuntimeError("simulated crash")
+            spec = scripted[request.custom_id]
+            return llm.BatchResult(request.custom_id, "succeeded", message=_Msg(spec))
+
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        analyze.analyze(
+            con,
+            cfg,
+            embedder=embed.FakeEmbedder(db.VEC_DIM),
+            batch_client=_CrashingClient(),
+            rubric_path=RUBRIC,
+            labels_path=LABELS,
+            proposals_dir=tmp_path / "proposals",
+            wait=True,
+            sleep=lambda s: None,
+        )
+
+    completed_before = con.execute("SELECT COUNT(*) FROM classifications").fetchone()[0]
+    # With workers=2, at most 2 items can already be in flight (and thus
+    # persisted) by the time the crash on c2 is discovered -- the exact count
+    # depends on real thread-completion order, so assert the bound, not a
+    # single value.
+    assert 1 <= completed_before <= 2
+
+    # "Restart": a fresh, non-crashing client picks up wherever the crash
+    # left off. No lingering `batches` row survives a parallel crash (the
+    # crashing item's row is never inserted, and other items are inserted
+    # and collected atomically before the exception unwinds), so this call
+    # starts a fresh run and relies on clf_hash/get_classification caching
+    # in _issues_to_classify to avoid redoing completed work.
+    summary = analyze.analyze(
+        con,
+        cfg,
+        embedder=embed.FakeEmbedder(db.VEC_DIM),
+        batch_client=_ParallelFakeClient(scripted, delay=0.0),
+        rubric_path=RUBRIC,
+        labels_path=LABELS,
+        proposals_dir=tmp_path / "proposals",
+        wait=True,
+        sleep=lambda s: None,
+    )
+
+    assert con.execute("SELECT COUNT(*) FROM classifications").fetchone()[0] == 4
+    assert summary["classified"] == 4 - completed_before
 
 
 def test_synchronous_client_persists_each_item_before_next(tmp_path):

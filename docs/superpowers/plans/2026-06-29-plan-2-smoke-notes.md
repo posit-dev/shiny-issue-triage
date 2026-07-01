@@ -3,6 +3,8 @@
 **Date:** 2026-06-29 (updated 2026-07-01 with a full-repo run)
 **Status:** VALIDATED — both a 5-issue slice and the full shinytest2 repo (59 open issues) have been run successfully via the `claude_cli` backend.
 
+**Addendum (2026-07-01):** `config/models.yaml` now sets `batch.workers: 2`, so a fresh full run will execute roughly 2x faster (concurrently) than the ~20-minute sequential timing recorded below. Functional results (classifications, spend, proposals) are unaffected by worker count — only wall-clock time changes.
+
 ## Overview
 
 This runbook documents the smoke test for the analysis pipeline (P2), which turns the mirror into triage proposals using local embeddings and the Anthropic Batch API. The test validates end-to-end functionality on the shinytest2 pilot repo.
