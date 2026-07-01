@@ -8,6 +8,7 @@ dependencies = [
     "fastembed>=0.4",
     "jsonschema>=4.0",
     "pyyaml>=6.0",
+    "shiny>=1.6.3",
     "sqlite-vec>=0.1.6",
     "zstandard>=0.22",
 ]
