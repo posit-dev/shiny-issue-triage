@@ -5,6 +5,7 @@ repositories:
   - rstudio/reactlog
   - rstudio/shinytest2
   - posit-dev/py-shinylive
+  - rstudio/promises
   # - rstudio/bsicons
   # - rstudio/bslib
   # - r-lib/cachem
@@ -22,7 +23,6 @@ repositories:
   # - rstudio/leaflet
   # - rstudio/plumber
   # - rstudio/pool
-  # - rstudio/promises
   # - rstudio/sass
   # - rstudio/shiny
   # - rstudio/shinycoreci
