@@ -36,8 +36,8 @@ fleet.
 
 ## Analysis pipeline (P2)
 
-Turns the mirror into triage proposals using local embeddings and the
-Anthropic Batch API. Model and embedder config live in `config/models.yaml`.
+Turns the mirror into triage proposals using local embeddings and a language
+model backend. Model and embedder config live in `config/models.yaml`.
 
 ```bash
 uv run triage-verse embed                         # compute/update embeddings (local, free)
@@ -45,11 +45,15 @@ uv run triage-verse analyze --wait                # classify + dedup -> .data/pr
 uv run triage-verse analyze-status                # in-flight batches + today's spend
 ```
 
+**Backends:** The default `backend: claude_cli` uses `claude -p` on Claude Code
+auth (no API key needed, requires Claude CLI installed and enterprise subscription).
+To switch to the Anthropic Batch API, set `backend: anthropic_batch` and provide
+`ANTHROPIC_API_KEY` in the environment (see issue #18).
+
 `analyze` is a resumable state machine: re-running it collects in-flight
 batches rather than resubmitting, so an interrupted run (or the future
 scheduled job) simply continues. Spend is metered to the mirror's `spend`
-table and capped by `max_usd_per_day` in `config/models.yaml`. The
-`ANTHROPIC_API_KEY` is read from the environment automatically.
+table and capped by `max_usd_per_day` in `config/models.yaml`.
 
 Design: `docs/superpowers/specs/2026-06-12-shinyverse-issue-triage-design.md`.
 Open followups: `docs/superpowers/plans/2026-06-12-triage-verse-followups.md`.

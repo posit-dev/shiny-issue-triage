@@ -8,11 +8,14 @@
 This runbook documents the smoke test for the analysis pipeline (P2), which turns the mirror into triage proposals using local embeddings and the Anthropic Batch API. The test validates end-to-end functionality on the shinytest2 pilot repo.
 
 **IMPORTANT:** This is a manual, one-time run that requires:
-- `ANTHROPIC_API_KEY` set in the environment
-- Network access to the Anthropic Batch API
+- Claude CLI installed and logged in (enterprise subscription)
+- `config/models.yaml` configured with `backend: claude_cli` (default)
+- Network access to Claude Code auth service
 - Expected cost: pennies (< $0.05 per run)
 
-This run has NOT yet been performed. A maintainer with `ANTHROPIC_API_KEY` must execute it.
+This run has NOT yet been performed. A maintainer with Claude CLI access must execute it.
+
+*Note:* To use the Anthropic Batch API instead, set `backend: anthropic_batch` and provide `ANTHROPIC_API_KEY` in the environment.
 
 ## Step 1: Ensure mirror is populated
 
