@@ -11,6 +11,7 @@ stages:
 batch:
   max_requests_per_batch: 500
   poll_interval_seconds: 30
+  workers: 2   # concurrent `claude -p` calls under backend: claude_cli; ignored by anthropic_batch
 spend:
   batch_only: true
   # Under backend: claude_cli, each `claude -p` call executes and bills
