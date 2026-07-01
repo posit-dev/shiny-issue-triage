@@ -35,3 +35,22 @@ def test_load_models_config_from_string(tmp_path):
     cfg = load_models_config(p)
     assert cfg.embed_dim == 8
     assert cfg.classify.confidence_floor is None
+
+
+def test_backend_defaults_to_claude_cli(tmp_path):
+    p = tmp_path / "m.yaml"
+    p.write_text(
+        "embedding: {model: m, dim: 8, candidate_top_k: 3, cosine_threshold: 0.5}\n"
+        "stages:\n"
+        "  classify: {model: claude-haiku-4-5, max_tokens: 100}\n"
+        "  recheck: {model: claude-sonnet-4-6, max_tokens: 200, confidence_floor: 0.6}\n"
+        "  dedup: {model: claude-sonnet-4-6, max_tokens: 200}\n"
+        "batch: {max_requests_per_batch: 50, poll_interval_seconds: 5}\n"
+        "spend: {batch_only: true, max_usd_per_day: 1, pricing: {}}\n"
+    )
+    assert load_models_config(p).backend == "claude_cli"
+
+
+def test_backend_read_from_file():
+    cfg = load_models_config(REPO_ROOT / "config" / "models.yaml")
+    assert cfg.backend in {"claude_cli", "anthropic_batch"}

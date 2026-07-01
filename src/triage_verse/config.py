@@ -54,6 +54,7 @@ class ModelsConfig:
     batch_only: bool
     max_usd_per_day: float
     pricing: dict[str, dict[str, float]]
+    backend: str = "claude_cli"
 
 
 def _stage(d: dict[str, Any]) -> StageConfig:
@@ -80,4 +81,5 @@ def load_models_config(path: str | pathlib.Path) -> ModelsConfig:
         batch_only=sp["batch_only"],
         max_usd_per_day=sp["max_usd_per_day"],
         pricing=sp["pricing"],
+        backend=data.get("backend", "claude_cli"),
     )

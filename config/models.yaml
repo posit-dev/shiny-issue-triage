@@ -1,3 +1,4 @@
+backend: claude_cli   # claude_cli (uses `claude -p`, no API key) | anthropic_batch (needs ANTHROPIC_API_KEY)
 embedding:
   model: sentence-transformers/all-MiniLM-L6-v2
   dim: 384
