@@ -84,6 +84,34 @@ def test_cli_embed_invokes_embed_repo(tmp_path, monkeypatch):
     assert calls == ["rstudio/shinytest2"]
 
 
+def test_cli_analyze_uses_backend_factory(tmp_path, monkeypatch):
+    made = {}
+    monkeypatch.setattr(embed_mod, "FastEmbedEmbedder", lambda *a, **k: object())
+    monkeypatch.setattr(
+        llm, "make_batch_client", lambda cfg: made.setdefault("client", object())
+    )
+    monkeypatch.setattr(
+        analyze_mod,
+        "analyze",
+        lambda con, cfg, **kw: {
+            "classified": 0,
+            "rechecked": 0,
+            "pairs": 0,
+            "halted_on_budget": False,
+        },
+    )
+    rc = cli.main(
+        [
+            "analyze",
+            "--db",
+            str(tmp_path / "m.sqlite"),
+            "--models-config",
+            str(_models_yaml(tmp_path)),
+        ]
+    )
+    assert rc == 0 and "client" in made
+
+
 def test_cli_analyze_status_runs(tmp_path):
     from triage_verse import db
 
