@@ -38,7 +38,7 @@ def row_ui(proposal: dict, snippet: str):
     github_url = f"https://github.com/{proposal['repo']}/issues/{proposal['issue']}"
     return ui.card(
         ui.card_header(_row_label(proposal)),
-        ui.p(f"confidence: {proposal['confidence']:.2f}"),
+        ui.p(f"confidence: {proposal.get('confidence', 0.0):.2f}"),
         ui.p(proposal.get("rationale") or ""),
         ui.pre(snippet),
         ui.a("View on GitHub", href=github_url, target="_blank"),
@@ -107,8 +107,9 @@ def server(input: Inputs, output: Outputs, session: Session):
     @reactive.effect
     @reactive.event(input.approve_visible)
     def _approve_visible():
-        for proposal in queue.get():
-            decisions.write([decisions.record(proposal, "approved")], DECISIONS_DIR)
+        decisions.write(
+            [decisions.record(p, "approved") for p in queue.get()], DECISIONS_DIR
+        )
         refresh()
 
 
