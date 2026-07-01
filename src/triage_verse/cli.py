@@ -103,7 +103,7 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
         full=args.full,
         wait=args.wait,
         embedder=embedder,
-        batch_client=llm.make_batch_client(cfg),
+        batch_client=llm.make_batch_client(cfg, log=print),
         rubric_path=".github/triage/issue-triage-rubric.md",
         labels_path=".github/triage/labels.yaml",
         proposals_dir=args.proposals_dir,

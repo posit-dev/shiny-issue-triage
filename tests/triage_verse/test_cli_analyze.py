@@ -88,7 +88,9 @@ def test_cli_analyze_uses_backend_factory(tmp_path, monkeypatch):
     made = {}
     monkeypatch.setattr(embed_mod, "FastEmbedEmbedder", lambda *a, **k: object())
     monkeypatch.setattr(
-        llm, "make_batch_client", lambda cfg: made.setdefault("client", object())
+        llm,
+        "make_batch_client",
+        lambda cfg, **kw: made.setdefault("client", object()),
     )
     monkeypatch.setattr(
         analyze_mod,

@@ -110,6 +110,29 @@ def test_submit_one_recovers_after_one_runner_failure():
     assert llm.extract_json(result.message) == {"verdict": "distinct"}
 
 
+def test_submit_logs_progress_per_item():
+    logged = []
+
+    def runner(args, prompt):
+        return _envelope('{"verdict": "duplicate"}')
+
+    client = llm.ClaudeCliClient(runner=runner, log=logged.append)
+    client.submit([_request("c0"), _request("c1")])
+
+    assert len(logged) == 2
+    assert "1/2" in logged[0] and "c0" in logged[0] and "succeeded" in logged[0]
+    assert "2/2" in logged[1] and "c1" in logged[1]
+
+
+def test_submit_default_log_is_silent(capsys):
+    def runner(args, prompt):
+        return _envelope('{"verdict": "duplicate"}')
+
+    llm.ClaudeCliClient(runner=runner).submit([_request()])
+
+    assert capsys.readouterr().out == ""
+
+
 def test_make_batch_client_selects_impl(monkeypatch):
     # AnthropicBatchClient() constructs anthropic.Anthropic(), which requires a
     # key to be present (no network call); set a dummy one so the test is offline.
@@ -118,6 +141,16 @@ def test_make_batch_client_selects_impl(monkeypatch):
     assert isinstance(
         llm.make_batch_client(_cfg("anthropic_batch")), llm.AnthropicBatchClient
     )
+
+
+def test_make_batch_client_threads_log_into_claude_cli():
+    logged = []
+    client = llm.make_batch_client(_cfg("claude_cli"), log=logged.append)
+    client._runner = lambda args, prompt: _envelope('{"verdict": "duplicate"}')
+
+    client.submit([_request("c0")])
+
+    assert logged and "c0" in logged[0]
 
 
 def _cfg(backend):

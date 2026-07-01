@@ -7,7 +7,7 @@ import subprocess
 import types
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Callable, Protocol, cast
 
 import jsonschema
 
@@ -197,14 +197,29 @@ class ClaudeCliClient:
     bound a single run's spend when using `claude_cli`.
     """
 
-    def __init__(self, runner=_default_runner, aliases=_MODEL_ALIASES) -> None:
+    def __init__(
+        self,
+        runner=_default_runner,
+        aliases=_MODEL_ALIASES,
+        log: Callable[[str], None] = lambda msg: None,
+    ) -> None:
         self._runner = runner
         self._aliases = aliases
+        self._log = log
         self._batches: dict[str, list[BatchResult]] = {}
 
     def submit(self, requests: list[BatchRequest]) -> str:
         pid = "cli-" + uuid.uuid4().hex[:8]
-        self._batches[pid] = [self.submit_one(r) for r in requests]
+        total = len(requests)
+        results = []
+        for i, r in enumerate(requests, start=1):
+            result = self.submit_one(r)
+            self._log(
+                f"  [{i}/{total}] {result.custom_id}: {result.status}"
+                f" (${result.cost_usd or 0:.4f})"
+            )
+            results.append(result)
+        self._batches[pid] = results
         return pid
 
     def status(self, provider_id: str) -> str:
@@ -283,7 +298,9 @@ def _usage_ns(usage: dict) -> object:
     )
 
 
-def make_batch_client(cfg: config.ModelsConfig) -> BatchClient:
+def make_batch_client(
+    cfg: config.ModelsConfig, *, log: Callable[[str], None] = print
+) -> BatchClient:
     if cfg.backend == "anthropic_batch":
         return AnthropicBatchClient()
-    return ClaudeCliClient()
+    return ClaudeCliClient(log=log)

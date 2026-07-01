@@ -44,14 +44,18 @@ def analyze(
     )
     from . import embed as embed_mod
 
+    embedded = 0
     for r in repos:
-        embed_mod.embed_repo(con, r, embedder, full=full)
+        embedded += embed_mod.embed_repo(con, r, embedder, full=full)
+    log(f"embedded {embedded} issue(s) across {len(repos)} repo(s)")
 
     # Stage 1: candidate pairs (local), cached by run for recheck/proposals.
     pairs = candidates.candidate_pairs(con, cfg, repo=repo, limit=limit)
+    log(f"found {len(pairs)} duplicate-candidate pair(s)")
 
     # Open issues needing classification.
     issues = _issues_to_classify(con, repo, limit)
+    log(f"{len(issues)} issue(s) need classification")
 
     # --- Wave 1: classify + dedup (only if not already submitted for this run) ---
     if not _stage_started(con, run_id, "classify"):
@@ -101,7 +105,7 @@ def analyze(
         ):
             summary["halted_on_budget"] = True
 
-    _collect(con, cfg, run_id, batch_client, allowed, summary, issues, pairs)
+    _collect(con, cfg, run_id, batch_client, allowed, summary, issues, pairs, log)
 
     # --- Wave 2: recheck (after every classify batch collected) ---
     def maybe_recheck():
@@ -138,20 +142,25 @@ def analyze(
             summary["halted_on_budget"] = True
 
     maybe_recheck()
-    _collect(con, cfg, run_id, batch_client, allowed, summary, issues, pairs)
+    _collect(con, cfg, run_id, batch_client, allowed, summary, issues, pairs, log)
 
     if wait:
         while db.open_batches(con):
             sleep(cfg.poll_interval_seconds)
-            _collect(con, cfg, run_id, batch_client, allowed, summary, issues, pairs)
+            _collect(
+                con, cfg, run_id, batch_client, allowed, summary, issues, pairs, log
+            )
             maybe_recheck()
-            _collect(con, cfg, run_id, batch_client, allowed, summary, issues, pairs)
+            _collect(
+                con, cfg, run_id, batch_client, allowed, summary, issues, pairs, log
+            )
 
     if not db.open_batches(con) and not summary["halted_on_budget"]:
         records = proposals.build(con, run_id)
         if records:
             proposals.write(records, proposals_dir)
         db.finish_run(con, run_id, summary)
+        log(f"wrote {len(records)} proposal(s) to {proposals_dir}")
     return summary
 
 
@@ -202,6 +211,7 @@ def _stage_collected(con, run_id, stage) -> bool:
 def _submit_stage(con, cfg, run_id, stage, client, requests, targets, log):
     if not requests:
         return True
+    log(f"submitting {stage}: {len(requests)} item(s)")
     for start in range(0, len(requests), cfg.max_requests_per_batch):
         if spend.breaker_tripped(con, cfg):
             log(f"budget reached; not submitting more {stage} batches")
@@ -218,11 +228,12 @@ def _submit_stage(con, cfg, run_id, stage, client, requests, targets, log):
     return True
 
 
-def _collect(con, cfg, run_id, client, allowed, summary, issues, pairs):
+def _collect(con, cfg, run_id, client, allowed, summary, issues, pairs, log):
     for batch in db.open_batches(con):
         if client.status(batch["provider_batch_id"]) != "ended":
             continue
         items = db.get_batch_items(con, batch["batch_id"])
+        count = 0
         for result in client.results(batch["provider_batch_id"]):
             target = json.loads(items[result.custom_id])
             if result.usage is not None:
@@ -238,8 +249,10 @@ def _collect(con, cfg, run_id, client, allowed, summary, issues, pairs):
             _apply_result(
                 con, cfg, run_id, batch["stage"], result, target, allowed, summary
             )
+            count += 1
         db.set_batch(con, batch["batch_id"], status="collected", ended_at=db._now())
         con.commit()
+        log(f"collected {batch['stage']}: {count} result(s)")
 
 
 def _model(cfg, stage):
