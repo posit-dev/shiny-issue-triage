@@ -53,7 +53,11 @@ To switch to the Anthropic Batch API, set `backend: anthropic_batch` and provide
 `analyze` is a resumable state machine: re-running it collects in-flight
 batches rather than resubmitting, so an interrupted run (or the future
 scheduled job) simply continues. Spend is metered to the mirror's `spend`
-table and capped by `max_usd_per_day` in `config/models.yaml`.
+table and capped by `max_usd_per_day` in `config/models.yaml`. Under
+`backend: claude_cli`, each `claude -p` call executes and bills synchronously,
+so `max_usd_per_day` is only enforced *between* stages/runs, not within a
+single stage; use `--limit` to bound a single run's spend (each call costs
+roughly $0.01-0.02).
 
 Design: `docs/superpowers/specs/2026-06-12-shinyverse-issue-triage-design.md`.
 Open followups: `docs/superpowers/plans/2026-06-12-triage-verse-followups.md`.

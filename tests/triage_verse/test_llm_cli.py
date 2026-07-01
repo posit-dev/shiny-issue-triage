@@ -88,6 +88,28 @@ def test_errored_after_two_bad_outputs_and_sums_cost():
     assert result.cost_usd == 0.06  # both attempts metered
 
 
+def test_submit_one_errors_without_raising_when_runner_always_fails():
+    def runner(args, prompt):
+        raise RuntimeError("boom")
+
+    result = llm.ClaudeCliClient(runner=runner).submit_one(_request())
+    assert result.status == "errored"
+
+
+def test_submit_one_recovers_after_one_runner_failure():
+    calls = {"n": 0}
+
+    def runner(args, prompt):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("boom")
+        return _envelope('{"verdict": "distinct"}')
+
+    result = llm.ClaudeCliClient(runner=runner).submit_one(_request())
+    assert result.status == "succeeded"
+    assert llm.extract_json(result.message) == {"verdict": "distinct"}
+
+
 def test_make_batch_client_selects_impl(monkeypatch):
     # AnthropicBatchClient() constructs anthropic.Anthropic(), which requires a
     # key to be present (no network call); set a dummy one so the test is offline.

@@ -13,6 +13,9 @@ batch:
   poll_interval_seconds: 30
 spend:
   batch_only: true
+  # Under backend: claude_cli, each `claude -p` call executes and bills
+  # synchronously inside submit(), so this cap is enforced between
+  # stages/runs, not within a single stage. Use --limit to bound one run.
   max_usd_per_day: 50
   pricing:
     claude-haiku-4-5:  { input: 0.50, cached: 0.05, output: 2.50 }

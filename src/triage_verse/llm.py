@@ -142,6 +142,7 @@ class AnthropicBatchClient:
 
 _MODEL_ALIASES = {"claude-haiku-4-5": "haiku", "claude-sonnet-4-6": "sonnet"}
 _MAX_PROMPT_CHARS = 50_000
+_CLI_TIMEOUT = 300  # seconds; a hung `claude -p` must not block the run forever.
 
 
 def _default_runner(args: list[str], prompt: str) -> str:
@@ -150,6 +151,7 @@ def _default_runner(args: list[str], prompt: str) -> str:
         capture_output=True,
         text=True,
         encoding="utf-8",
+        timeout=_CLI_TIMEOUT,
     )
     if proc.returncode != 0:
         raise RuntimeError(f"claude -p exited {proc.returncode}: {proc.stderr[:500]}")
@@ -181,7 +183,15 @@ class _CliMessage:
 
 
 class ClaudeCliClient:
-    """Runs `claude -p` per request on Claude Code's ambient auth (no API key)."""
+    """Runs `claude -p` per request on Claude Code's ambient auth (no API key).
+
+    Unlike the Anthropic Batch API client, this backend executes each request
+    and incurs its real cost synchronously inside `submit()`, before results
+    are ever collected. That means `analyze`'s daily-budget breaker (checked
+    between chunks/stages) cannot bound spend *within* a single stage for
+    this backend -- only between stages and between runs. Use `--limit` to
+    bound a single run's spend when using `claude_cli`.
+    """
 
     def __init__(self, runner=_default_runner, aliases=_MODEL_ALIASES) -> None:
         self._runner = runner
@@ -204,11 +214,14 @@ class ClaudeCliClient:
         model = self._aliases.get(params["model"], params["model"])
         schema = params["output_config"]["format"]["schema"]
         system = "\n".join(b["text"] for b in params["system"])
+        # Assumes the single-user-message shape that classify.build_requests /
+        # dedup.build_requests produce (one user message, no multi-turn history).
         user = str(params["messages"][0]["content"])[:_MAX_PROMPT_CHARS]
         total_cost = 0.0
         last_usage: object = types.SimpleNamespace(
             input_tokens=0, cache_read_input_tokens=0, output_tokens=0
         )
+        last_error: object = "cli-output-invalid"
         for attempt in range(2):
             nudge = (
                 ""
@@ -231,13 +244,18 @@ class ClaudeCliClient:
                 "--tools",
                 "",
             ]
-            envelope = json.loads(self._runner(args, user))
+            try:
+                envelope = json.loads(self._runner(args, user))
+            except Exception as exc:  # noqa: BLE001 - any runner/parse failure is a failed attempt
+                last_error = f"cli-call-failed: {exc}"
+                continue
             total_cost += float(envelope.get("total_cost_usd") or 0.0)
             last_usage = _usage_ns(envelope.get("usage") or {})
             try:
                 data = _extract_json_object(envelope["result"])
                 jsonschema.validate(data, schema)
             except (ValueError, json.JSONDecodeError, jsonschema.ValidationError):
+                last_error = "cli-output-invalid"
                 continue
             return BatchResult(
                 request.custom_id,
@@ -248,7 +266,7 @@ class ClaudeCliClient:
         return BatchResult(
             request.custom_id,
             "errored",
-            error="cli-output-invalid",
+            error=last_error,
             cost_usd=total_cost,
         )
 
