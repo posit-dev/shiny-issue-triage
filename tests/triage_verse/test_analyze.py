@@ -1,4 +1,7 @@
+import json
 import pathlib
+import threading
+import time
 
 from triage_verse import analyze, config, db, embed, llm
 
@@ -7,7 +10,7 @@ RUBRIC = REPO_ROOT / ".github" / "triage" / "issue-triage-rubric.md"
 LABELS = REPO_ROOT / ".github" / "triage" / "labels.yaml"
 
 
-def _cfg(cap=50.0):
+def _cfg(cap=50.0, workers=1):
     return config.ModelsConfig(
         "m",
         db.VEC_DIM,
@@ -24,6 +27,7 @@ def _cfg(cap=50.0):
             "claude-haiku-4-5": {"input": 0.5, "cached": 0.05, "output": 2.5},
             "claude-sonnet-5": {"input": 1.5, "cached": 0.15, "output": 7.5},
         },
+        workers=workers,
     )
 
 
@@ -200,6 +204,138 @@ def _n_issues(con, n):
             (i + 1, f"issue {i + 1}", f"unrelated body content {i + 1}"),
         )
     con.commit()
+
+
+class _Block:
+    type = "text"
+
+    def __init__(self, text):
+        self.text = text
+
+
+class _Usage:
+    def __init__(self):
+        self.input_tokens = 10
+        self.cache_read_input_tokens = 0
+        self.output_tokens = 5
+
+
+class _Msg:
+    def __init__(self, payload):
+        self.content = [_Block(json.dumps(payload))]
+        self.usage = _Usage()
+
+
+class _ParallelFakeClient:
+    """Exposes only submit_one -- the worker-pool primitive. Tracks how many
+    calls were simultaneously in flight, to prove real concurrency occurred
+    (a non-flaky alternative to asserting on wall-clock timing)."""
+
+    synchronous = True
+
+    def __init__(self, scripted, delay=0.05):
+        self.scripted = scripted
+        self.delay = delay
+        self._lock = threading.Lock()
+        self.active = 0
+        self.max_active = 0
+
+    def submit_one(self, request):
+        with self._lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        time.sleep(self.delay)
+        with self._lock:
+            self.active -= 1
+        spec = self.scripted[request.custom_id]
+        return llm.BatchResult(request.custom_id, "succeeded", message=_Msg(spec))
+
+
+def test_parallel_dispatch_runs_up_to_workers_items_concurrently(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+    _n_issues(con, 4)
+    cfg = _cfg(workers=2)
+    scripted = {f"c{i}": _clf(0.9) for i in range(4)}
+    client = _ParallelFakeClient(scripted, delay=0.05)
+
+    summary = analyze.analyze(
+        con,
+        cfg,
+        embedder=embed.FakeEmbedder(db.VEC_DIM),
+        batch_client=client,
+        rubric_path=RUBRIC,
+        labels_path=LABELS,
+        proposals_dir=tmp_path / "proposals",
+        wait=True,
+        sleep=lambda s: None,
+    )
+
+    assert summary["classified"] == 4
+    assert client.max_active == 2  # exactly the worker limit -- proves real overlap
+    assert con.execute("SELECT COUNT(*) FROM classifications").fetchone()[0] == 4
+    rows = con.execute("SELECT status FROM batches WHERE stage='classify'").fetchall()
+    assert len(rows) == 4 and all(r["status"] == "collected" for r in rows)
+
+
+def test_parallel_breaker_blocks_all_dispatch_when_already_over_budget(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+    _n_issues(con, 3)
+    db.insert_spend(con, "old", "classify", "claude-haiku-4-5", 0, 0, 0, 100.0)
+    cfg = _cfg(cap=1.0, workers=2)
+    scripted = {f"c{i}": _clf(0.9) for i in range(3)}
+    client = _ParallelFakeClient(scripted, delay=0.01)
+
+    summary = analyze.analyze(
+        con,
+        cfg,
+        embedder=embed.FakeEmbedder(db.VEC_DIM),
+        batch_client=client,
+        rubric_path=RUBRIC,
+        labels_path=LABELS,
+        proposals_dir=tmp_path / "proposals",
+        wait=True,
+        sleep=lambda s: None,
+    )
+
+    assert summary["halted_on_budget"] is True
+    assert summary["classified"] == 0
+    assert con.execute("SELECT COUNT(*) FROM classifications").fetchone()[0] == 0
+
+
+def test_parallel_breaker_bounds_overshoot_by_worker_count(tmp_path):
+    # Each classify item costs exactly $1.00 (same pricing rig as the
+    # sequential breaker test). With a $2.0 cap: the breaker only trips once
+    # *already-recorded* spend >= $2.0, which needs at least 2 completed
+    # items ($2.00). With workers=2, at most 1 extra item can already be in
+    # flight at the moment the 2nd completion crosses the cap (since at most
+    # `workers` items are ever in flight at once) -- so completed count is
+    # bounded to [2, 2 + (workers - 1)] = [2, 3].
+    con = db.connect(tmp_path / "m.sqlite")
+    _n_issues(con, 5)
+    cfg = _cfg(cap=2.0, workers=2)
+    cfg.pricing["claude-haiku-4-5"] = {
+        "input": 0.0,
+        "cached": 0.0,
+        "output": 200_000.0,
+    }
+    scripted = {f"c{i}": _clf(0.9) for i in range(5)}
+    client = _ParallelFakeClient(scripted, delay=0.02)
+
+    summary = analyze.analyze(
+        con,
+        cfg,
+        embedder=embed.FakeEmbedder(db.VEC_DIM),
+        batch_client=client,
+        rubric_path=RUBRIC,
+        labels_path=LABELS,
+        proposals_dir=tmp_path / "proposals",
+        wait=True,
+        sleep=lambda s: None,
+    )
+
+    assert summary["halted_on_budget"] is True
+    assert 2 <= summary["classified"] <= 3
+    assert summary["classified"] < 5  # the breaker had a real effect
 
 
 def test_breaker_trips_mid_stage_not_just_between_stages(tmp_path):

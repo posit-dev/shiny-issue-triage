@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import time
 
@@ -221,6 +222,10 @@ def _submit_stage(
         return True
     log(f"submitting {stage}: {len(requests)} item(s)")
     synchronous = getattr(client, "synchronous", False)
+    if synchronous and cfg.workers > 1:
+        return _submit_stage_parallel(
+            con, cfg, run_id, stage, client, requests, targets, allowed, summary, log
+        )
     chunk_size = 1 if synchronous else cfg.max_requests_per_batch
     total = len(requests)
     done = 0
@@ -248,6 +253,71 @@ def _submit_stage(
             ):
                 done += len(chunk)
                 log(f"  {stage} progress: {done}/{total}")
+    return True
+
+
+def _submit_stage_parallel(
+    con, cfg, run_id, stage, client, requests, targets, allowed, summary, log
+):
+    """Run up to cfg.workers requests concurrently via client.submit_one.
+
+    Worker threads only compute (they call client.submit_one, which touches
+    no shared mutable state); this function, running on the caller's own
+    thread, owns every database write and log call, so there is exactly one
+    writer to `con` at all times -- avoiding SQLite's single-writer
+    constraint entirely rather than working around it.
+
+    The budget breaker is checked before dispatching each *new* item, not
+    after each completion (money already committed to a running subprocess
+    can't be un-spent). That means a tripped budget can be exceeded by at
+    most `cfg.workers` already-in-flight items' worth of spend, and a crash
+    loses at most that many in-flight items -- both bounds now scale with
+    `cfg.workers` instead of being fixed at 1, which is the explicit,
+    documented trade-off of running more than one call at a time.
+    """
+    total = len(requests)
+    next_idx = 0
+    done = 0
+    halted = False
+    with concurrent.futures.ThreadPoolExecutor(max_workers=cfg.workers) as pool:
+        in_flight: dict[concurrent.futures.Future, int] = {}
+        while next_idx < total or in_flight:
+            while not halted and len(in_flight) < cfg.workers and next_idx < total:
+                if spend.breaker_tripped(con, cfg):
+                    halted = True
+                    break
+                future = pool.submit(client.submit_one, requests[next_idx])
+                in_flight[future] = next_idx
+                next_idx += 1
+            if not in_flight:
+                break
+            done_future = next(concurrent.futures.as_completed(in_flight))
+            idx = in_flight.pop(done_future)
+            result = done_future.result()
+            batch_id = f"{run_id}:{stage}:{idx}"
+            db.insert_batch(
+                con, batch_id, run_id, stage, f"local:{result.custom_id}", 1
+            )
+            db.insert_batch_items(con, batch_id, {result.custom_id: targets[idx]})
+            _record_and_apply(
+                con,
+                cfg,
+                run_id,
+                stage,
+                result,
+                json.loads(targets[idx]),
+                allowed,
+                summary,
+            )
+            db.set_batch(con, batch_id, status="collected", ended_at=db._now())
+            con.commit()
+            done += 1
+            log(f"  {stage} progress: {done}/{total}")
+    if halted:
+        log(
+            f"budget reached; not submitting more {stage} batches ({done}/{total} done)"
+        )
+        return False
     return True
 
 
