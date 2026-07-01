@@ -115,13 +115,17 @@ def analyze(
     _collect(con, cfg, run_id, batch_client, allowed, summary, issues, pairs, log)
 
     # --- Wave 2: recheck (after every classify batch collected) ---
+    recheck_waiting_logged = False
     recheck_skip_logged = False
 
     def maybe_recheck():
-        nonlocal recheck_skip_logged
+        nonlocal recheck_waiting_logged, recheck_skip_logged
         if summary["halted_on_budget"]:
             return
         if not _stage_collected(con, run_id, "classify"):
+            if not recheck_waiting_logged:
+                log("stage: recheck - waiting on classify to finish")
+                recheck_waiting_logged = True
             return
         if _stage_started(con, run_id, "recheck"):
             return
