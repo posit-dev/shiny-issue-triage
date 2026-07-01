@@ -54,11 +54,13 @@ To switch to the Anthropic Batch API, set `backend: anthropic_batch` and provide
 batches rather than resubmitting, so an interrupted run (or the future
 scheduled job) simply continues. Spend is metered to the mirror's `spend`
 table and capped by `max_usd_per_day` in `config/models.yaml`. Under
-`backend: claude_cli`, each `claude -p` call executes and bills synchronously,
-so items are submitted and collected one at a time and `max_usd_per_day` is
-checked before every item, bounding spend within a stage as well as between
-stages/runs; use `--limit` to additionally bound a single run's spend (each
-call costs roughly $0.01-0.02).
+`backend: claude_cli`, each `claude -p` call executes and bills
+synchronously; `config/models.yaml`'s `batch.workers` controls how many run
+concurrently (default 1, this repo starts at 2). `max_usd_per_day` is
+checked before every new dispatch, bounding a tripped budget's overshoot
+(and a crash's loss) to at most `workers` items instead of the whole stage;
+use `--limit` to additionally bound a single run's spend (each call costs
+roughly $0.01-0.02).
 
 Design: `docs/superpowers/specs/2026-06-12-shinyverse-issue-triage-design.md`.
 Open followups: `docs/superpowers/plans/2026-06-12-triage-verse-followups.md`.

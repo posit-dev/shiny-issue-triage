@@ -190,12 +190,16 @@ class ClaudeCliClient:
     """Runs `claude -p` per request on Claude Code's ambient auth (no API key).
 
     Unlike the Anthropic Batch API client, this backend executes each request
-    and incurs its real cost synchronously inside `submit()`, before results
-    are ever collected. `analyze._submit_stage` detects this via the
-    `synchronous` marker below and chunks at size 1, collecting each item
-    immediately after it is submitted -- so `analyze`'s daily-budget breaker
-    is checked before every single item, not just once per up-to-500-item
-    chunk, and bounds spend *within* a stage as well as between stages/runs.
+    and incurs its real cost synchronously inside `submit()`/`submit_one()`,
+    before results are ever collected. `analyze._submit_stage` detects this
+    via the `synchronous` marker below. With `cfg.workers == 1` (the
+    default), it chunks at size 1 and collects each item immediately after
+    it is submitted, so the daily-budget breaker is checked before every
+    single item. With `cfg.workers > 1`, up to that many `submit_one` calls
+    run concurrently in a bounded worker pool, and the breaker is checked
+    before each new dispatch -- bounding a tripped budget's overshoot, and a
+    crash's loss, to at most `cfg.workers` items instead of 1. Either way,
+    this is enforced *within* a stage, not just between stages/runs.
     """
 
     synchronous = True
