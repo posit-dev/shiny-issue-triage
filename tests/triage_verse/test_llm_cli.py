@@ -143,6 +143,10 @@ def test_make_batch_client_selects_impl(monkeypatch):
     )
 
 
+def test_claude_cli_client_is_marked_synchronous():
+    assert llm.ClaudeCliClient(runner=lambda *a, **k: "{}").synchronous is True
+
+
 def test_make_batch_client_threads_log_into_claude_cli():
     logged = []
     client = llm.make_batch_client(_cfg("claude_cli"), log=logged.append)

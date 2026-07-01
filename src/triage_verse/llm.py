@@ -191,11 +191,14 @@ class ClaudeCliClient:
 
     Unlike the Anthropic Batch API client, this backend executes each request
     and incurs its real cost synchronously inside `submit()`, before results
-    are ever collected. That means `analyze`'s daily-budget breaker (checked
-    between chunks/stages) cannot bound spend *within* a single stage for
-    this backend -- only between stages and between runs. Use `--limit` to
-    bound a single run's spend when using `claude_cli`.
+    are ever collected. `analyze._submit_stage` detects this via the
+    `synchronous` marker below and chunks at size 1, collecting each item
+    immediately after it is submitted -- so `analyze`'s daily-budget breaker
+    is checked before every single item, not just once per up-to-500-item
+    chunk, and bounds spend *within* a stage as well as between stages/runs.
     """
+
+    synchronous = True
 
     def __init__(
         self,

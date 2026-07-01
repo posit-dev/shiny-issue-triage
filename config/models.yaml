@@ -14,8 +14,10 @@ batch:
 spend:
   batch_only: true
   # Under backend: claude_cli, each `claude -p` call executes and bills
-  # synchronously inside submit(), so this cap is enforced between
-  # stages/runs, not within a single stage. Use --limit to bound one run.
+  # synchronously inside submit(); analyze._submit_stage chunks at size 1 and
+  # collects immediately for this backend, so this cap is checked before
+  # every item -- enforced within a single stage as well as between
+  # stages/runs. Use --limit to additionally bound one run's spend.
   max_usd_per_day: 50
   pricing:
     claude-haiku-4-5: { input: 0.50, cached: 0.05, output: 2.50 }

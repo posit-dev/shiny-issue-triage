@@ -75,6 +75,8 @@ def analyze(
                     prefix="c",
                 ),
                 targets=[json.dumps([i["repo"], i["number"]]) for i in issues],
+                allowed=allowed,
+                summary=summary,
                 log=log,
             )
             is False
@@ -99,6 +101,8 @@ def analyze(
                     json.dumps([[a[0], a[1], a[2]], [b[0], b[1], b[2]]])
                     for a, b in pairs
                 ],
+                allowed=allowed,
+                summary=summary,
                 log=log,
             )
             is False
@@ -135,6 +139,8 @@ def analyze(
                     with_comments=True,
                 ),
                 targets=[json.dumps([i["repo"], i["number"]]) for i in to_recheck],
+                allowed=allowed,
+                summary=summary,
                 log=log,
             )
             is False
@@ -208,16 +214,24 @@ def _stage_collected(con, run_id, stage) -> bool:
     return bool(rows) and all(b["status"] == "collected" for b in rows)
 
 
-def _submit_stage(con, cfg, run_id, stage, client, requests, targets, log):
+def _submit_stage(
+    con, cfg, run_id, stage, client, requests, targets, allowed, summary, log
+):
     if not requests:
         return True
     log(f"submitting {stage}: {len(requests)} item(s)")
-    for start in range(0, len(requests), cfg.max_requests_per_batch):
+    synchronous = getattr(client, "synchronous", False)
+    chunk_size = 1 if synchronous else cfg.max_requests_per_batch
+    total = len(requests)
+    done = 0
+    for start in range(0, total, chunk_size):
         if spend.breaker_tripped(con, cfg):
-            log(f"budget reached; not submitting more {stage} batches")
+            log(
+                f"budget reached; not submitting more {stage} batches ({done}/{total} done)"
+            )
             return False
-        chunk = requests[start : start + cfg.max_requests_per_batch]
-        chunk_targets = targets[start : start + cfg.max_requests_per_batch]
+        chunk = requests[start : start + chunk_size]
+        chunk_targets = targets[start : start + chunk_size]
         provider_id = client.submit(chunk)
         batch_id = f"{run_id}:{stage}:{start}"
         db.insert_batch(con, batch_id, run_id, stage, provider_id, len(chunk))
@@ -225,34 +239,49 @@ def _submit_stage(con, cfg, run_id, stage, client, requests, targets, log):
             con, batch_id, {r.custom_id: t for r, t in zip(chunk, chunk_targets)}
         )
         con.commit()
+        if synchronous:
+            batch_row = con.execute(
+                "SELECT * FROM batches WHERE batch_id=?", (batch_id,)
+            ).fetchone()
+            if _try_collect_batch(
+                con, cfg, run_id, client, allowed, summary, batch_row, log
+            ):
+                done += len(chunk)
+                log(f"  {stage} progress: {done}/{total}")
+    return True
+
+
+def _try_collect_batch(con, cfg, run_id, client, allowed, summary, batch, log) -> bool:
+    """Collect and apply results for one batch if it has ended. Returns True if collected."""
+    if client.status(batch["provider_batch_id"]) != "ended":
+        return False
+    items = db.get_batch_items(con, batch["batch_id"])
+    count = 0
+    for result in client.results(batch["provider_batch_id"]):
+        target = json.loads(items[result.custom_id])
+        if result.usage is not None:
+            spend.record_spend(
+                con,
+                run_id,
+                batch["stage"],
+                _model(cfg, batch["stage"]),
+                cfg.pricing,
+                result.usage,
+                cost_usd=result.cost_usd,
+            )
+        _apply_result(
+            con, cfg, run_id, batch["stage"], result, target, allowed, summary
+        )
+        count += 1
+    db.set_batch(con, batch["batch_id"], status="collected", ended_at=db._now())
+    con.commit()
+    log(f"collected {batch['stage']}: {count} result(s)")
     return True
 
 
 def _collect(con, cfg, run_id, client, allowed, summary, issues, pairs, log):
     for batch in db.open_batches(con):
-        if client.status(batch["provider_batch_id"]) != "ended":
-            continue
-        items = db.get_batch_items(con, batch["batch_id"])
-        count = 0
-        for result in client.results(batch["provider_batch_id"]):
-            target = json.loads(items[result.custom_id])
-            if result.usage is not None:
-                spend.record_spend(
-                    con,
-                    run_id,
-                    batch["stage"],
-                    _model(cfg, batch["stage"]),
-                    cfg.pricing,
-                    result.usage,
-                    cost_usd=result.cost_usd,
-                )
-            _apply_result(
-                con, cfg, run_id, batch["stage"], result, target, allowed, summary
-            )
-            count += 1
-        db.set_batch(con, batch["batch_id"], status="collected", ended_at=db._now())
-        con.commit()
-        log(f"collected {batch['stage']}: {count} result(s)")
+        _try_collect_batch(con, cfg, run_id, client, allowed, summary, batch, log)
 
 
 def _model(cfg, stage):
