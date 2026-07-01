@@ -85,56 +85,41 @@ Record the total USD spent (sum of all rows in the `spend` table).
 
 **Expected:** < $0.05 (pennies; if notably higher, investigate batch efficiency).
 
-## Results — PENDING (manual run required)
+## Results — smoke run (2026-07-01)
 
-**Date run:** [Not yet performed]
+**Run:** `triage-verse analyze --repo rstudio/shinytest2 --limit 5 --wait` — backend `claude_cli` (no API key). A small `--limit 5` slice validated the real `claude -p` path cheaply; the full 59-issue run is optional (see Dedup note).
 
-**Maintainer:** [To be filled by runner]
+**Result line:** `classified=5 rechecked=1 pairs=0 halted_on_budget=False`
 
-**Cost:** [To be filled by runner]
+**Cost:** $0.069 total for 5 issues.
 
-### Spend summary
+### Spend (from reported `total_cost_usd`)
 ```
-[Run the command from Verification Checklist #1 and paste results here]
+stage     model              n  usd     in_tok  cached  out_tok
+classify  claude-haiku-4-5   5  0.0523  15260   0       7400
+recheck   claude-sonnet-4-6  1  0.0170       3       0     44
 ```
+Per-classify call ≈ $0.0105 — roughly half the ~$0.019 baseline, confirming `--system-prompt` replacement removes Claude Code's default-prompt overhead. Note: `claude -p` reports the replaced system prompt under `cache_creation_input_tokens`, which the spend row does not currently capture, so the token columns undercount — but `usd` (from `total_cost_usd`) is authoritative and correct.
 
-### Cached tokens
-```
-[Run the command from Verification Checklist #2 and paste results here]
-```
+### Classifications (5, shinytest2)
+type / priority / assessment / confidence all sensible (feat/test/chore). The conf-0.55 issue was rechecked by Sonnet (model overwritten to `claude-sonnet-4-6`), confirming the low-confidence recheck flow. ✓
 
-### Classification count
-```
-[Run the command from Verification Checklist #3a and paste results here]
-```
+### Dedup verdicts
+0 — no candidate pairs above the 0.80 cosine threshold within 5 issues, so the dedup **adjudication** path was not exercised at `--limit 5`. The full 59-issue run would exercise it.
 
-### Dedup verdict count
-```
-[Run the command from Verification Checklist #3b and paste results here]
-```
+### Proposals
+`.data/proposals/2026/W27.jsonl` — 8 records (5 `set-priority`, 3 `add-label`), each carrying an `issue_updated_at` freshness token. ✓
 
-### Proposals files found
-```
-[Run the command from Verification Checklist #4 and paste results here]
-```
+### Breaker
+Not tripped (`max_usd_per_day` = 50). ✓
 
-### Sample proposal records
-```
-[Run the command from Verification Checklist #5 and paste a few sample records here]
-```
+### Checklist
+- [x] Spend > 0 USD (sourced from `total_cost_usd`)
+- [~] Cached tokens > 0 — n/a here (system prompt reported as `cache_creation`, not captured; cost still correct)
+- [x] Classifications populated + recheck flow exercised
+- [ ] Dedup verdicts populated — 0 at `--limit 5` (needs the full run)
+- [x] Proposals JSONL valid, correct ISO-week partition
+- [x] Breaker did not trip
+- [x] `claude_cli` path validated end-to-end with no API key
 
-### Breaker status
-Was the daily spend limit (`max_usd_per_day` in `config/models.yaml`) reached?
-
-**Result:** [Not yet run — expected: No]
-
-### Overall result
-- [ ] Spend > 0 USD
-- [ ] Cached tokens > 0
-- [ ] Classifications populated
-- [ ] Dedup verdicts populated
-- [ ] Proposals JSONL valid
-- [ ] Breaker did not trip
-- [ ] All checks passed
-
-**Status:** [To be filled after run]
+**Status:** PATH VALIDATED on a 5-issue slice. Full 59-issue run (to exercise dedup adjudication + produce a complete proposals set) is optional and pending a go-ahead.
