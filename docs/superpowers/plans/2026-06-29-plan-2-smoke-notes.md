@@ -1,7 +1,7 @@
 # Plan 2 Analysis Pipeline — Smoke-Run Runbook
 
-**Date:** 2026-06-29  
-**Status:** PENDING (manual run required)
+**Date:** 2026-06-29 (updated 2026-07-01 with a full-repo run)
+**Status:** VALIDATED — both a 5-issue slice and the full shinytest2 repo (59 open issues) have been run successfully via the `claude_cli` backend.
 
 ## Overview
 
@@ -122,4 +122,44 @@ Not tripped (`max_usd_per_day` = 50). ✓
 - [x] Breaker did not trip
 - [x] `claude_cli` path validated end-to-end with no API key
 
-**Status:** PATH VALIDATED on a 5-issue slice. Full 59-issue run (to exercise dedup adjudication + produce a complete proposals set) is optional and pending a go-ahead.
+**Status:** PATH VALIDATED on a 5-issue slice. See the full-repo run below for dedup adjudication coverage.
+
+## Results — full-repo run (2026-07-01)
+
+**Run:** `triage-verse analyze --repo rstudio/shinytest2 --wait` — all 59 open issues, no `--limit`, backend `claude_cli`, using the Sonnet 5 migration for recheck/dedup (see `decisions/2026-07-01-sonnet-5-for-recheck-dedup.md`). Ran unattended in the background; took roughly 20 minutes end to end (sequential `claude -p` calls — see issue #19 for parallelization).
+
+**Result line:** `classified=54 rechecked=8 pairs=0 halted_on_budget=False`
+
+**Cost:** $1.10 total (cumulative with the earlier 5-issue smoke run: classify 59 calls in total across both runs, recheck 9 calls total — 1 stale pre-migration Sonnet 4.6 call plus 8 new Sonnet 5 calls).
+
+### Spend (from reported `total_cost_usd`)
+```
+stage     model              n   usd     in_tok  cached  out_tok
+classify  claude-haiku-4-5   59  0.84    161175  0       110431
+recheck   claude-sonnet-4-6  1   0.017        3       0       44   (stale, pre-migration)
+recheck   claude-sonnet-5    8   0.2452   10227   12366    1039
+```
+Sonnet 5's 8 recheck calls averaged **$0.031/call** — consistent with the ~2x-vs-4.6 premium documented in the Sonnet 5 decision record, but not disqualifying at this volume (8 of 59 issues).
+
+### Classifications (54 new, 59 total for the repo)
+Distribution: 47 actionable, 10 needs-info, 2 out-of-scope; type/priority mostly `fix`/`feat` at Medium. One close-candidate surfaced (issue #190, `not-planned` — a docs/reference suggestion misfiled as a shinytest2 issue), correctly routed through the Sonnet 5 recheck (confidence 0.65) and held its recommendation. 8 issues fell below the confidence floor or carried a close-candidate and were rechecked by Sonnet 5, all landing at confidence 0.55–0.75 post-recheck. ✓
+
+### Dedup verdicts
+**0 pairs, even across the full 59-issue repo** (not just the 5-issue slice). Candidate retrieval found no pairs above the 0.80 cosine-similarity threshold. Per Barret: there may genuinely be no near-duplicate open issues in shinytest2 at this time — a plausible, unforced explanation, not necessarily a pipeline defect. The dedup **adjudication** call path itself remains validated only by the earlier per-task test suite (fake batch client), not by a real `claude -p` call, since no repo tried so far has produced a candidate pair. Worth trying against a larger or higher-traffic repo (e.g. `rstudio/shiny`) if real-call validation of dedup specifically is wanted later.
+
+### Proposals
+`.data/proposals/2026/W27.jsonl` — 79 records total across both runs (59 `set-priority`, 19 `add-label`, 1 `close`), each with an `issue_updated_at` freshness token. Nothing posted to GitHub — proposals only, no executor exists yet. ✓
+
+### Breaker
+Not tripped (`max_usd_per_day` = 50, well above the $1.10 spent). ✓
+
+### Checklist (full-repo run)
+- [x] Spend > 0 USD, sourced from `total_cost_usd` for every call including Sonnet 5
+- [x] Classifications populated at full repo scale (54 new + 5 prior)
+- [x] Recheck flow exercised repeatedly (8 calls), including a real close-candidate
+- [~] Dedup verdicts — still 0; plausibly a true negative (no duplicates in this repo) rather than a bug; real-call dedup path remains unexercised
+- [x] Proposals JSONL valid at scale (79 records)
+- [x] Breaker did not trip
+- [x] `claude_cli` path validated end-to-end, unattended, at full single-repo scale, on Sonnet 5
+
+**Overall status:** VALIDATED for classify + recheck at full single-repo scale. Dedup adjudication's real-call path is still unvalidated for lack of a repo with actual near-duplicate issues — not a known defect, just untested by circumstance.
