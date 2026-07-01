@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import pathlib
 import uuid
-from datetime import date
+
+from . import jsonl_log
 
 
 def build(con, run_id: str) -> list[dict]:
@@ -100,13 +101,4 @@ def _rec(
 def write(
     records: list[dict], base_dir: str | pathlib.Path, *, today: str | None = None
 ) -> pathlib.Path:
-    day = date.fromisoformat(today) if today else date.today()
-    year, week, _ = day.isocalendar()
-    out = pathlib.Path(base_dir) / f"{year}" / f"W{week:02d}.jsonl"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    existing = out.read_text(encoding="utf-8") if out.exists() else ""
-    payload = existing + "".join(json.dumps(r) + "\n" for r in records)
-    tmp = out.with_name(out.name + ".tmp")
-    tmp.write_text(payload, encoding="utf-8")
-    tmp.replace(out)
-    return out
+    return jsonl_log.append_weekly(records, base_dir, today=today)
