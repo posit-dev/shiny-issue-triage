@@ -233,6 +233,7 @@ def _collect(con, cfg, run_id, client, allowed, summary, issues, pairs):
                     _model(cfg, batch["stage"]),
                     cfg.pricing,
                     result.usage,
+                    cost_usd=result.cost_usd,
                 )
             _apply_result(
                 con, cfg, run_id, batch["stage"], result, target, allowed, summary

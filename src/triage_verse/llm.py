@@ -27,6 +27,7 @@ class BatchResult:
     status: str  # succeeded | errored | canceled | expired
     message: Any = None  # provider message object on success
     error: Any = None
+    cost_usd: float | None = None
 
     @property
     def usage(self):

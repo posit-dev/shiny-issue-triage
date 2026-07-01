@@ -53,6 +53,23 @@ def _cfg(cap):
     )
 
 
+def test_record_spend_prefers_explicit_cost_usd(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+    # pricing would compute 0.50, but explicit cost_usd wins
+    usd = spend.record_spend(
+        con,
+        "run1",
+        "classify",
+        "claude-haiku-4-5",
+        PRICING,
+        _Usage(1_000_000, 0, 0),
+        cost_usd=0.0188,
+    )
+    assert usd == 0.0188
+    row = con.execute("SELECT usd, input_tokens FROM spend").fetchone()
+    assert row["usd"] == 0.0188 and row["input_tokens"] == 1_000_000
+
+
 def test_breaker_trips_when_daily_spend_at_cap(tmp_path):
     con = db.connect(tmp_path / "m.sqlite")
     assert spend.breaker_tripped(con, _cfg(cap=1.0)) is False

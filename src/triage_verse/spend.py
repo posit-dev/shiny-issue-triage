@@ -16,21 +16,22 @@ def usd_for_usage(
     )
 
 
-def record_spend(con, run_id, stage, model, pricing, usage) -> float:
+def record_spend(con, run_id, stage, model, pricing, usage, cost_usd=None) -> float:
     input_tokens = getattr(usage, "input_tokens", 0) or 0
     cached_tokens = getattr(usage, "cache_read_input_tokens", 0) or 0
     output_tokens = getattr(usage, "output_tokens", 0) or 0
-    usd = usd_for_usage(
-        pricing,
-        model,
-        input_tokens=input_tokens,
-        cached_tokens=cached_tokens,
-        output_tokens=output_tokens,
-    )
+    if cost_usd is None:
+        cost_usd = usd_for_usage(
+            pricing,
+            model,
+            input_tokens=input_tokens,
+            cached_tokens=cached_tokens,
+            output_tokens=output_tokens,
+        )
     db.insert_spend(
-        con, run_id, stage, model, input_tokens, cached_tokens, output_tokens, usd
+        con, run_id, stage, model, input_tokens, cached_tokens, output_tokens, cost_usd
     )
-    return usd
+    return cost_usd
 
 
 def breaker_tripped(con, cfg) -> bool:
