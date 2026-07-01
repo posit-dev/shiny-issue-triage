@@ -251,6 +251,23 @@ def _submit_stage(
     return True
 
 
+def _record_and_apply(
+    con, cfg, run_id, stage, result, target, allowed, summary
+) -> None:
+    """Record spend for one result (if it has usage) and apply it."""
+    if result.usage is not None:
+        spend.record_spend(
+            con,
+            run_id,
+            stage,
+            _model(cfg, stage),
+            cfg.pricing,
+            result.usage,
+            cost_usd=result.cost_usd,
+        )
+    _apply_result(con, cfg, run_id, stage, result, target, allowed, summary)
+
+
 def _try_collect_batch(con, cfg, run_id, client, allowed, summary, batch, log) -> bool:
     """Collect and apply results for one batch if it has ended. Returns True if collected."""
     if client.status(batch["provider_batch_id"]) != "ended":
@@ -259,17 +276,7 @@ def _try_collect_batch(con, cfg, run_id, client, allowed, summary, batch, log) -
     count = 0
     for result in client.results(batch["provider_batch_id"]):
         target = json.loads(items[result.custom_id])
-        if result.usage is not None:
-            spend.record_spend(
-                con,
-                run_id,
-                batch["stage"],
-                _model(cfg, batch["stage"]),
-                cfg.pricing,
-                result.usage,
-                cost_usd=result.cost_usd,
-            )
-        _apply_result(
+        _record_and_apply(
             con, cfg, run_id, batch["stage"], result, target, allowed, summary
         )
         count += 1
