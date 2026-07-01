@@ -35,6 +35,7 @@ def analyze(
     summary = {"classified": 0, "rechecked": 0, "pairs": 0, "halted_on_budget": False}
 
     # Stage 0: embed (local).
+    log("stage: embed - starting")
     repos = (
         [repo]
         if repo
@@ -48,11 +49,12 @@ def analyze(
     embedded = 0
     for r in repos:
         embedded += embed_mod.embed_repo(con, r, embedder, full=full)
-    log(f"embedded {embedded} issue(s) across {len(repos)} repo(s)")
+    log(f"stage: embed - done ({embedded} issue(s) across {len(repos)} repo(s))")
 
     # Stage 1: candidate pairs (local), cached by run for recheck/proposals.
+    log("stage: candidates - starting")
     pairs = candidates.candidate_pairs(con, cfg, repo=repo, limit=limit)
-    log(f"found {len(pairs)} duplicate-candidate pair(s)")
+    log(f"stage: candidates - done ({len(pairs)} duplicate-candidate pair(s))")
 
     # Open issues needing classification.
     issues = _issues_to_classify(con, repo, limit)
@@ -113,7 +115,10 @@ def analyze(
     _collect(con, cfg, run_id, batch_client, allowed, summary, issues, pairs, log)
 
     # --- Wave 2: recheck (after every classify batch collected) ---
+    recheck_skip_logged = False
+
     def maybe_recheck():
+        nonlocal recheck_skip_logged
         if summary["halted_on_budget"]:
             return
         if not _stage_collected(con, run_id, "classify"):
@@ -122,6 +127,9 @@ def analyze(
             return
         to_recheck = _issues_needing_recheck(con, cfg, issues)
         if not to_recheck:
+            if not recheck_skip_logged:
+                log("stage: recheck - skipped (nothing needs rechecking)")
+                recheck_skip_logged = True
             return
         if (
             _submit_stage(
@@ -153,6 +161,11 @@ def analyze(
 
     if wait:
         while db.open_batches(con):
+            open_count = len(db.open_batches(con))
+            log(
+                f"waiting: {open_count} batch(es) still open, "
+                f"checking again in {cfg.poll_interval_seconds}s"
+            )
             sleep(cfg.poll_interval_seconds)
             _collect(
                 con, cfg, run_id, batch_client, allowed, summary, issues, pairs, log
@@ -219,13 +232,16 @@ def _submit_stage(
     con, cfg, run_id, stage, client, requests, targets, allowed, summary, log
 ):
     if not requests:
+        log(f"stage: {stage} - skipped (nothing to do)")
         return True
-    log(f"submitting {stage}: {len(requests)} item(s)")
+    log(f"stage: {stage} - starting ({len(requests)} item(s))")
     synchronous = getattr(client, "synchronous", False)
     if synchronous and cfg.workers > 1:
-        return _submit_stage_parallel(
+        result = _submit_stage_parallel(
             con, cfg, run_id, stage, client, requests, targets, allowed, summary, log
         )
+        log(f"stage: {stage} - {'done' if result else 'halted on budget'}")
+        return result
     chunk_size = 1 if synchronous else cfg.max_requests_per_batch
     total = len(requests)
     done = 0
@@ -234,6 +250,7 @@ def _submit_stage(
             log(
                 f"budget reached; not submitting more {stage} batches ({done}/{total} done)"
             )
+            log(f"stage: {stage} - halted on budget")
             return False
         chunk = requests[start : start + chunk_size]
         chunk_targets = targets[start : start + chunk_size]
@@ -253,6 +270,10 @@ def _submit_stage(
             ):
                 done += len(chunk)
                 log(f"  {stage} progress: {done}/{total}")
+    if synchronous:
+        log(f"stage: {stage} - done")
+    else:
+        log(f"stage: {stage} - submitted, awaiting async completion")
     return True
 
 

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import io
 import pathlib
+import sys
 
 from . import analytics as analytics_mod
 from . import analyze as analyze_mod
@@ -206,5 +208,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Force line buffering even when stdout is redirected to a file (a
+    # background process, a scheduled job, `> log.txt`, ...), where Python
+    # otherwise defaults to block buffering. Without this, log() output can
+    # sit unflushed for the entire run instead of being tailable live.
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(line_buffering=True)
     args = build_parser().parse_args(argv)
     return args.func(args)
