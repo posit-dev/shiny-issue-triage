@@ -8,8 +8,6 @@ import fs from 'node:fs';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-const DEFAULT_NEW_ISSUE_LOOKBACK_DAYS = 14;
-
 const LIMITS = Object.freeze({
   actions: 30,
   labelsPerItem: 6,
@@ -114,35 +112,6 @@ export function resolveTriageLabels(itemLabels, confidence) {
   return labels;
 }
 
-function parseTime(value) {
-  const time = Date.parse(String(value || ''));
-  return Number.isNaN(time) ? null : time;
-}
-
-export function shouldSkipTriageAction(issue, options = {}) {
-  if (!issue) return null;
-
-  const state = String(issue.state || '').toLowerCase();
-  if (state && state !== 'open') {
-    return 'issue is not open';
-  }
-
-  const days = Number.parseInt(
-    String(options.newIssueLookbackDays ?? DEFAULT_NEW_ISSUE_LOOKBACK_DAYS),
-    10,
-  );
-  const created = parseTime(issue.created_at ?? issue.createdAt);
-  const now = parseTime(options.now) ?? Date.now();
-  if (created !== null && days > 0) {
-    const cutoff = now - days * 24 * 60 * 60 * 1000;
-    if (created < cutoff) {
-      return 'issue was created before the new-issue window';
-    }
-  }
-
-  return null;
-}
-
 export function sanitizeReportBody(raw) {
   const stripped = String(raw).replace(CONTROL_CHARS, '');
   if (stripped.length > LIMITS.report) {
@@ -219,21 +188,6 @@ function runGh(args, { token }) {
     stdio: 'inherit',
     env: { ...process.env, GH_TOKEN: token },
   });
-}
-
-function readIssue(repo, issueNumber, { token }) {
-  if (!token) {
-    fail('readIssue called without a token.');
-  }
-  try {
-    return JSON.parse(execFileSync('gh', ['api', `repos/${repo}/issues/${issueNumber}`], {
-      encoding: 'utf8',
-      env: { ...process.env, GH_TOKEN: token },
-    }));
-  } catch (error) {
-    fail(`Could not read ${repo}#${issueNumber}: ${error.message}`);
-  }
-  return null;
 }
 
 const PRIORITY_BADGES = new Map([
@@ -359,15 +313,6 @@ function main() {
     if (!allowedRepos.has(repo)) fail(`Repository is not allowlisted: ${repo}`);
     if (!/^[1-9][0-9]*$/.test(issueNumber)) fail(`Issue number must be a positive integer: ${issueNumber}`);
 
-    const token = tokenForRepo(repo);
-    const skipReason = shouldSkipTriageAction(readIssue(repo, issueNumber, { token }), {
-      newIssueLookbackDays: process.env.TRIAGE_NEW_ISSUE_LOOKBACK_DAYS,
-    });
-    if (skipReason) {
-      console.log(`Skipping ${repo}#${issueNumber}: ${skipReason}.`);
-      continue;
-    }
-
     if (maxIssuesPerRepo > 0) {
       const next = (perRepoCounts.get(repo) || 0) + 1;
       if (next > maxIssuesPerRepo) {
@@ -383,6 +328,8 @@ function main() {
     for (const label of labels) {
       if (!allowedLabels.has(label)) fail(`Label is not allowlisted: ${label}`);
     }
+
+    const token = tokenForRepo(repo);
 
     for (const label of labels) {
       runGh(['issue', 'edit', issueNumber, '--repo', repo, '--add-label', label], { token });

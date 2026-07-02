@@ -30,7 +30,6 @@ env:
   TRIAGE_LABELS: .github/triage/labels.yaml
   TRIAGE_RUBRIC: .github/triage/issue-triage-rubric.md
   TRIAGE_STATE_DIR: .triage-state
-  TRIAGE_NEW_ISSUE_LOOKBACK_DAYS: 14
   ANTHROPIC_MODEL: sonnet
 
 jobs:
@@ -191,12 +190,10 @@ jobs:
             Candidate selection:
             - Use only the allowlisted repositories from the config.
             - Scan issues, not pull requests.
-            - Prefer issues created after the stored cursor.
-            - Do not triage older issues merely because new comments updated them.
-            - Skip closed issues, including older issues that received many comments and were then closed.
+            - Prefer issues created or updated after the stored cursor.
             - If `SCAN_SINCE` is set, use it instead of stored cursors for this run.
             - Respect `max_issues_per_repo` from the config and `MAX_ISSUES_TOTAL` from the workflow input.
-            - Skip bots, closed issues, and issues already labeled `ai-triage:done`, `ai-triage:accepted`, `human-reviewed`, or `ai-generated-issue`.
+            - Skip bots, closed issues unless recently reopened, and issues already labeled `ai-triage:done`, `ai-triage:accepted`, `human-reviewed`, or `ai-generated-issue`.
 
             Decision rules:
             - Use only labels listed in `${{ env.TRIAGE_LABELS }}`. Never invent labels.
@@ -227,7 +224,6 @@ jobs:
           TRIAGE_ALLOWED_REPOS: ${{ steps.repos.outputs.owner_repos }}
           TRIAGE_ALLOWED_LABELS: ${{ steps.labels-config.outputs.allowed }}
           TRIAGE_MAX_ISSUES_PER_REPO: ${{ steps.repos.outputs.max_issues_per_repo }}
-          TRIAGE_NEW_ISSUE_LOOKBACK_DAYS: ${{ env.TRIAGE_NEW_ISSUE_LOOKBACK_DAYS }}
         run: node .github/triage/scripts/process-triage-actions.mjs
 
 

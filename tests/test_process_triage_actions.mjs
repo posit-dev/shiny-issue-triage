@@ -9,7 +9,6 @@ import {
   commentKindForLabels,
   formatPriorityBadge,
   formatSummary,
-  shouldSkipTriageAction,
   neuterMentions,
   resolveTriageLabels,
   sanitizeComment,
@@ -195,42 +194,4 @@ test('resolveTriageLabels applies done or needs-review based on confidence/label
   assert.deepEqual(resolveTriageLabels(['Priority: Low', 'ai-triage:done'], 'high'), ['Priority: Low', 'ai-triage:done']);
   assert.deepEqual(resolveTriageLabels(['Priority: Low', 'ai-triage:done'], 'low'), ['Priority: Low', 'ai-triage:needs-review']);
   assert.deepEqual(resolveTriageLabels(['Priority: Low', 'ai-triage:needs-review', 'ai-triage:done'], 'medium'), ['Priority: Low', 'ai-triage:needs-review']);
-});
-
-test('shouldSkipTriageAction skips closed issues and old comment-only updates', () => {
-  assert.equal(
-    shouldSkipTriageAction(
-      {
-        state: 'closed',
-        created_at: '2026-06-30T00:00:00Z',
-        updated_at: '2026-07-02T00:00:00Z',
-      },
-      { now: '2026-07-02T00:00:00Z', newIssueLookbackDays: 14 },
-    ),
-    'issue is not open',
-  );
-
-  assert.equal(
-    shouldSkipTriageAction(
-      {
-        state: 'open',
-        created_at: '2023-06-18T11:27:28Z',
-        updated_at: '2026-06-28T07:24:43Z',
-      },
-      { now: '2026-07-02T00:00:00Z', newIssueLookbackDays: 14 },
-    ),
-    'issue was created before the new-issue window',
-  );
-
-  assert.equal(
-    shouldSkipTriageAction(
-      {
-        state: 'open',
-        created_at: '2026-06-30T00:00:00Z',
-        updated_at: '2026-07-02T00:00:00Z',
-      },
-      { now: '2026-07-02T00:00:00Z', newIssueLookbackDays: 14 },
-    ),
-    null,
-  );
 });
