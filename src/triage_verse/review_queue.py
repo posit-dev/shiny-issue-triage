@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import logging
 import pathlib
+import sqlite3
+
+from . import db
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +33,15 @@ def _iter_jsonl_records(base_dir: str | pathlib.Path) -> list[dict]:
     return records
 
 
+def _is_closed(con: sqlite3.Connection, repo: str, number: int) -> bool:
+    issue = db.get_issue(con, repo, number)
+    return issue is not None and issue["state"] != "OPEN"
+
+
 def load_undecided(
-    proposals_dir: str | pathlib.Path, decisions_dir: str | pathlib.Path
+    proposals_dir: str | pathlib.Path,
+    decisions_dir: str | pathlib.Path,
+    con: sqlite3.Connection,
 ) -> list[dict]:
     decided_ids = {
         r["proposal_id"]
@@ -41,7 +51,9 @@ def load_undecided(
     proposals = [
         r
         for r in _iter_jsonl_records(proposals_dir)
-        if r.get("id") not in decided_ids and r.get("action") in SUPPORTED_ACTIONS
+        if r.get("id") not in decided_ids
+        and r.get("action") in SUPPORTED_ACTIONS
+        and not _is_closed(con, r["repo"], r["issue"])
     ]
     return sorted(proposals, key=lambda r: r.get("confidence", 0.0))
 

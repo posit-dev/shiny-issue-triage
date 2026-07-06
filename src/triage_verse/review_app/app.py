@@ -88,11 +88,13 @@ app_ui = ui.page_fluid(
 
 
 def server(input: Inputs, output: Outputs, session: Session):
-    queue = reactive.value(review_queue.load_undecided(PROPOSALS_DIR, DECISIONS_DIR))
+    queue = reactive.value(
+        review_queue.load_undecided(PROPOSALS_DIR, DECISIONS_DIR, _con)
+    )
     wired: set[str] = set()
 
     def refresh() -> None:
-        queue.set(review_queue.load_undecided(PROPOSALS_DIR, DECISIONS_DIR))
+        queue.set(review_queue.load_undecided(PROPOSALS_DIR, DECISIONS_DIR, _con))
 
     def on_decide(proposal: dict, verdict: str) -> None:
         decisions.write([decisions.record(proposal, verdict)], DECISIONS_DIR)
