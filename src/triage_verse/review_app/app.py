@@ -37,14 +37,22 @@ def _row_snippet(proposal: dict) -> str:
 def row_ui(proposal: dict, snippet: str):
     github_url = f"https://github.com/{proposal['repo']}/issues/{proposal['issue']}"
     return ui.card(
-        ui.card_header(_row_label(proposal)),
+        ui.card_header(ui.a(_row_label(proposal), href=github_url, target="_blank")),
         ui.p(f"confidence: {proposal.get('confidence', 0.0):.2f}"),
         ui.p(proposal.get("rationale") or ""),
         ui.pre(snippet),
-        ui.a("View on GitHub", href=github_url, target="_blank"),
-        ui.input_action_button("approve", "Approve"),
-        ui.input_action_button("reject", "Reject"),
-        ui.input_action_button("skip", "Skip"),
+        ui.div(
+            ui.input_action_button(
+                "approve", "Approve", style="background-color: #2e7d32; color: white;"
+            ),
+            ui.input_action_button(
+                "reject", "Reject", style="background-color: #c62828; color: white;"
+            ),
+            ui.input_action_button(
+                "skip", "Skip", style="background-color: #757575; color: white;"
+            ),
+            style="display: flex; gap: 0.5rem;",
+        ),
     )
 
 
