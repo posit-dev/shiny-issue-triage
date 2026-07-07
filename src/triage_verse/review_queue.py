@@ -55,7 +55,7 @@ def load_undecided(
         and r.get("action") in SUPPORTED_ACTIONS
         and not _is_closed(con, r["repo"], r["issue"])
     ]
-    return sorted(proposals, key=lambda r: r.get("confidence", 0.0))
+    return sorted(proposals, key=lambda r: r.get("confidence", 0.0), reverse=True)
 
 
 def issue_snippet(title: str, body: str | None, max_chars: int = 280) -> str:

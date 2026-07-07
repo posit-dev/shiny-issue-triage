@@ -37,7 +37,7 @@ def _seed_issue(con, repo, number, state):
     con.commit()
 
 
-def test_load_undecided_sorts_by_confidence_ascending(tmp_path):
+def test_load_undecided_sorts_by_confidence_descending(tmp_path):
     proposals_dir = tmp_path / "proposals"
     decisions_dir = tmp_path / "decisions"
     _write_jsonl(
@@ -60,7 +60,7 @@ def test_load_undecided_sorts_by_confidence_ascending(tmp_path):
         ],
     )
     rows = review_queue.load_undecided(proposals_dir, decisions_dir, _mirror(tmp_path))
-    assert [r["id"] for r in rows] == ["b", "a"]
+    assert [r["id"] for r in rows] == ["a", "b"]
 
 
 def test_load_undecided_excludes_any_verdict(tmp_path):

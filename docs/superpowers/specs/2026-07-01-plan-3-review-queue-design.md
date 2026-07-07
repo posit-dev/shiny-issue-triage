@@ -14,7 +14,7 @@ Plan 2 turns the mirror into a stream of triage proposals (`add-label`, `set-pri
 
 **In scope**
 
-- A review queue: all undecided proposals, flat-sorted by confidence (ascending — least-confident first).
+- A review queue: all undecided proposals, flat-sorted by confidence (descending — most-confident first).
 - Two proposal action types: `add-label` and `set-priority`.
 - Per-row **Approve** / **Reject** / **Skip** buttons, plus an **Approve visible rows** bulk action.
 - A decisions log (`.data/decisions/YYYY/Www.jsonl`) that every button press writes to, and that the queue reads back to filter out already-decided proposals.
@@ -47,7 +47,7 @@ Plan 2 provides `proposals.py`, whose `write()` appends records shaped `{id, rep
 
 Following the existing 1:1 `src/triage_verse/<name>.py` ↔ `tests/triage_verse/test_<name>.py` pattern, with the UI kept as thin as possible so the decision logic is unit-testable without a browser:
 
-- **`review_queue.py`** (pure, no Shiny import) — `load_undecided(proposals_dir, decisions_dir) -> list[dict]`: reads every `.jsonl` file under both trees, builds the set of already-decided `proposal_id`s, filters them out of the proposals list, and returns the remainder sorted by `confidence` ascending. Malformed lines are skipped with a logged warning, not a crash.
+- **`review_queue.py`** (pure, no Shiny import) — `load_undecided(proposals_dir, decisions_dir, con) -> list[dict]`: reads every `.jsonl` file under both trees, builds the set of already-decided `proposal_id`s, filters them out of the proposals list along with any proposal whose issue is no longer open in the mirror (`con`, a `sqlite3.Connection`), and returns the remainder sorted by `confidence` descending. Malformed lines are skipped with a logged warning, not a crash.
 - **`decisions.py`** (pure, no Shiny import) — mirrors `proposals.py`'s `write()`: `record(proposal, verdict) -> dict` builds a decision record; `write(records, decisions_dir, today=None) -> Path` appends them to `.data/decisions/YYYY/Www.jsonl` with the same atomic temp-file-then-replace pattern Plan 1/2 already use.
 - **`review_app/app.py`** (thin) — a standalone Shiny-for-Python app (`app_ui`, `server`) that imports the two modules above, renders the queue, and wires button clicks to `decisions.write()` followed by a re-render of `review_queue.load_undecided()`. Run directly: `shiny run src/triage_verse/review_app/app.py`. No new CLI subcommand — this keeps the app a standard Shiny entry point that can be pointed at by `shiny run`, Connect, or any other host without special-casing a custom launcher.
 
@@ -69,8 +69,9 @@ There is no `reviewer` field. The program design specifies a single human gate (
 
 ## 5. Queue behavior
 
-- **Ordering:** flat list (no grouping by action type), sorted by `confidence` ascending — proposals the model was least sure about surface first.
-- **Row content:** repo + issue number, action + params rendered as text (e.g. `add-label: bug`), confidence, rationale, a truncated title/body snippet looked up from `mirror.sqlite` by `(repo, issue)`, and a link to the issue on GitHub. If the issue is missing from the mirror (deleted/transferred — a known, documented edge case from Plan 1), the row shows a "not found in mirror" placeholder instead of failing.
+- **Ordering:** flat list (no grouping by action type), sorted by `confidence` descending — proposals the model was most sure about surface first.
+- **Staleness filter:** `load_undecided` also drops any proposal whose issue is no longer `OPEN` in the mirror at load time (checked via `db.get_issue`). A proposal is a static snapshot from whenever the classification pipeline ran (Plan 2 only ever classifies open issues), but the issue may since have been closed on GitHub and re-synced into the mirror; such proposals are stale and are excluded from view rather than shown for review. A proposal whose issue isn't in the mirror at all (a separate, pre-existing case — e.g. deleted/transferred) is still shown with the "not found in mirror" placeholder below, since absence isn't evidence the issue is closed.
+- **Row content:** repo + issue number (as a link to the GitHub issue), action + params rendered as text (e.g. `add-label: bug`), confidence, rationale, a truncated title/body snippet looked up from `mirror.sqlite` by `(repo, issue)`. If the issue is missing from the mirror (deleted/transferred — a known, documented edge case from Plan 1), the row shows a "not found in mirror" placeholder instead of failing.
 - **Per-row actions:** **Approve**, **Reject**, **Skip** buttons. Each writes one decision record and removes that row from the visible queue.
 - **Bulk action:** **Approve visible rows** — approves every row currently rendered in the queue view (i.e., everything not yet filtered out by an existing decision), in one action. There is no confidence-threshold filter control in this first pass; "visible" means "everything the queue is currently showing."
 
