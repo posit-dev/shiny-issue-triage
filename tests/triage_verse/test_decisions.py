@@ -29,6 +29,20 @@ def test_record_copies_proposal_fields():
     assert rec["decided_at"].endswith("Z")
 
 
+def test_record_edited_params_override():
+    rec = decisions.record(
+        _proposal(), "edited", params={"label": "good first issue"}
+    )
+    assert rec["verdict"] == "edited"
+    assert rec["params"] == {"label": "good first issue"}
+    assert rec["proposed_params"] == {"label": "bug"}
+
+
+def test_record_without_override_has_no_proposed_params():
+    rec = decisions.record(_proposal(), "approved")
+    assert "proposed_params" not in rec
+
+
 def test_write_appends_weekly_partition(tmp_path):
     rec = decisions.record(_proposal(), "rejected")
     path = decisions.write([rec], tmp_path / "decisions", today="2026-06-29")
