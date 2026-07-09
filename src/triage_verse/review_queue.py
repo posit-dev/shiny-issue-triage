@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 SUPPORTED_ACTIONS = frozenset({"add-label", "set-priority"})
 
 
-def _iter_jsonl_records(base_dir: str | pathlib.Path) -> list[dict]:
+def iter_jsonl_records(base_dir: str | pathlib.Path) -> list[dict]:
     base = pathlib.Path(base_dir)
     if not base.exists():
         return []
@@ -45,12 +45,12 @@ def load_undecided(
 ) -> list[dict]:
     decided_ids = {
         r["proposal_id"]
-        for r in _iter_jsonl_records(decisions_dir)
+        for r in iter_jsonl_records(decisions_dir)
         if "proposal_id" in r
     }
     proposals = [
         r
-        for r in _iter_jsonl_records(proposals_dir)
+        for r in iter_jsonl_records(proposals_dir)
         if r.get("id") not in decided_ids
         and r.get("action") in SUPPORTED_ACTIONS
         and not _is_closed(con, r["repo"], r["issue"])

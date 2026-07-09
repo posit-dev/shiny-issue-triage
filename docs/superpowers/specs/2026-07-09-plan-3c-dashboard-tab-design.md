@@ -81,10 +81,14 @@ counting it against precision would penalize deferring hard calls.
   - `stage_spend(con) -> list[dict]` — per stage:
     `{stage, calls, input_tokens, cached_tokens, output_tokens, usd}`,
     ordered by USD descending.
-  - `svg_line_chart(points, ...) -> str` and
-    `svg_grouped_bars(rows, ...) -> str` — minimal SVG string builders used
-    for burndown/throughput (line) and opened-vs-closed (bars). Empty input
-    returns a short "no data" placeholder string.
+  - `svg_line_chart(series, ...) -> str` — a minimal SVG string builder for
+    one or two line series, used for burndown and throughput (one series)
+    and opened-vs-closed (two series; with multi-year weekly history —
+    hundreds of points — lines stay readable where grouped bars would not).
+    Empty input returns a short "no data" placeholder string. Colors are the
+    validated categorical slots blue `#2a78d6` and aqua `#1baf7a`; because
+    aqua sits below 3:1 contrast on a light surface, every chart ships with
+    a visible legend and an adjacent data table.
   - Decisions JSONL parsing reuses `review_queue._iter_jsonl_records`
     (promoted to a public name, `iter_jsonl_records`, since two modules now
     need it).
