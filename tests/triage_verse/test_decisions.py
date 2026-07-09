@@ -30,9 +30,7 @@ def test_record_copies_proposal_fields():
 
 
 def test_record_edited_params_override():
-    rec = decisions.record(
-        _proposal(), "edited", params={"label": "good first issue"}
-    )
+    rec = decisions.record(_proposal(), "edited", params={"label": "good first issue"})
     assert rec["verdict"] == "edited"
     assert rec["params"] == {"label": "good first issue"}
     assert rec["proposed_params"] == {"label": "bug"}
