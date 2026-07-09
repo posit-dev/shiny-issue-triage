@@ -129,3 +129,57 @@ def test_get_issue_returns_row(tmp_path):
 def test_get_issue_missing_returns_none(tmp_path):
     con = db.connect(tmp_path / "m.sqlite")
     assert db.get_issue(con, "rstudio/shiny", 999) is None
+
+
+def _comment_row(**overrides):
+    row = {
+        "repo": "rstudio/shiny",
+        "issue_number": 1,
+        "comment_id": 1,
+        "author": "bob",
+        "body": "hi",
+        "created_at": "2024-01-03T00:00:00Z",
+        "updated_at": "2024-01-03T00:00:00Z",
+    }
+    row.update(overrides)
+    return row
+
+
+def test_get_comments_ordered_and_filtered(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+    db.upsert_comment(
+        con, _comment_row(comment_id=2, created_at="2024-01-05T00:00:00Z", body="second")
+    )
+    db.upsert_comment(con, _comment_row(comment_id=1, body="first"))
+    db.upsert_comment(
+        con, _comment_row(comment_id=3, issue_number=9, body="other issue")
+    )
+    db.upsert_comment(
+        con, _comment_row(comment_id=4, repo="rstudio/bslib", body="other repo")
+    )
+
+    comments = db.get_comments(con, "rstudio/shiny", 1)
+    assert [c["body"] for c in comments] == ["first", "second"]
+
+
+def test_get_comments_empty(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+    assert db.get_comments(con, "rstudio/shiny", 1) == []
+
+
+def test_get_pr_roundtrip_and_missing(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+    db.upsert_pr(
+        con,
+        {
+            "repo": "rstudio/shiny",
+            "number": 7,
+            "merged": 1,
+            "merged_at": "2024-03-01T00:00:00Z",
+            "closing_issue_refs_json": "[3]",
+            "head_ref": "fix",
+            "base_ref": "main",
+        },
+    )
+    assert db.get_pr(con, "rstudio/shiny", 7)["merged"] == 1
+    assert db.get_pr(con, "rstudio/shiny", 999) is None
