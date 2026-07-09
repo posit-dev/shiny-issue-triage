@@ -221,7 +221,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     queue = reactive.value(
         review_queue.load_undecided(PROPOSALS_DIR, DECISIONS_DIR, _con)
     )
-    drawer_state = reactive.value(None)
+    drawer_state = reactive.value[dict | None](None)
     wired: set[str] = set()
 
     def refresh() -> None:

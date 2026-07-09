@@ -148,7 +148,8 @@ def _comment_row(**overrides):
 def test_get_comments_ordered_and_filtered(tmp_path):
     con = db.connect(tmp_path / "m.sqlite")
     db.upsert_comment(
-        con, _comment_row(comment_id=2, created_at="2024-01-05T00:00:00Z", body="second")
+        con,
+        _comment_row(comment_id=2, created_at="2024-01-05T00:00:00Z", body="second"),
     )
     db.upsert_comment(con, _comment_row(comment_id=1, body="first"))
     db.upsert_comment(
