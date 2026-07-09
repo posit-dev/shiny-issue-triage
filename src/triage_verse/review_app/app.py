@@ -231,12 +231,69 @@ def _drawer_comments(item: dict) -> list:
     return parts
 
 
+def _close_duplicate_params(params: dict) -> str:
+    canonical = params.get("canonical")
+    bits = [f"canonical: {canonical or '(not stated)'}"]
+    if params.get("cross_repo_option"):
+        bits.append(f"cross-repo: {params['cross_repo_option']}")
+    return " · ".join(bits)
+
+
+def _drawer_sibling(proposal: dict) -> list:
+    parts = [ui.h4("Duplicate sibling")]
+    sibling = review_queue.duplicate_sibling(proposal)
+    if sibling is None:
+        parts.append(ui.p("(sibling not identified from evidence)"))
+        return parts
+    repo, number = sibling
+    item = drawer.load_item(_con, repo, number)
+    if item is None:
+        github_url = f"https://github.com/{repo}/issues/{number}"
+        parts += [
+            ui.p(f"{repo}#{number} — (not found in mirror)"),
+            ui.p(ui.a("Open on GitHub ↗", href=github_url, target="_blank")),
+        ]
+        return parts
+    parts += [
+        ui.h5(f"{repo}#{number}: {item['title']}"),
+        ui.p(_drawer_meta_line(item), class_="drawer-meta"),
+        ui.div(*[ui.span(label, class_="drawer-label") for label in item["labels"]]),
+        ui.pre(review_queue.issue_snippet(item["title"], item["body"])),
+        ui.p(ui.a("Open on GitHub ↗", href=item["github_url"], target="_blank")),
+    ]
+    return parts
+
+
 def _drawer_proposal(proposal: dict) -> list:
-    return [
+    if proposal["action"] == "close-duplicate":
+        params_line = _close_duplicate_params(proposal["params"])
+    else:
+        params_line = str(proposal["params"])
+    parts = [
         ui.h4("Proposal"),
-        ui.p(f"{proposal['action']}: {proposal['params']}"),
+        ui.p(f"{proposal['action']}: {params_line}"),
         ui.p(f"confidence: {proposal.get('confidence', 0.0):.2f}"),
         ui.p(proposal.get("rationale") or "(no rationale)"),
+        ui.div(
+            ui.input_action_button(
+                "drawer_approve",
+                "Approve",
+                style="background-color: #2e7d32; color: white;",
+            ),
+            ui.input_action_button(
+                "drawer_reject",
+                "Reject",
+                style="background-color: #c62828; color: white;",
+            ),
+            ui.input_action_button(
+                "drawer_skip", "Skip", style="background-color: #757575; color: white;"
+            ),
+            style="display: flex; gap: 0.5rem; margin-bottom: 0.75rem;",
+        ),
+    ]
+    if proposal["action"] == "close-duplicate":
+        parts += _drawer_sibling(proposal)
+    parts += [
         ui.h4("Linked evidence"),
         ui.tags.ul(
             *[
@@ -245,6 +302,7 @@ def _drawer_proposal(proposal: dict) -> list:
             ]
         ),
     ]
+    return parts
 
 
 def _drawer_panel(state: dict, item: dict | None):
@@ -367,6 +425,26 @@ def server(input: Inputs, output: Outputs, session: Session):
     @reactive.event(input.drawer_close)
     def _drawer_close():
         drawer_state.set(None)
+
+    def _decide_from_drawer(verdict: str) -> None:
+        state = drawer_state.get()
+        if state is not None:
+            on_decide(state["proposal"], verdict)
+
+    @reactive.effect
+    @reactive.event(input.drawer_approve)
+    def _drawer_approve():
+        _decide_from_drawer("approved")
+
+    @reactive.effect
+    @reactive.event(input.drawer_reject)
+    def _drawer_reject():
+        _decide_from_drawer("rejected")
+
+    @reactive.effect
+    @reactive.event(input.drawer_skip)
+    def _drawer_skip():
+        _decide_from_drawer("skipped")
 
     @reactive.effect
     @reactive.event(input.approve_visible)
