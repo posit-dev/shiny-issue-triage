@@ -232,6 +232,22 @@ def upsert_pr(con: sqlite3.Connection, row: dict) -> None:
     _upsert(con, "prs", PR_COLUMNS, ("repo", "number"), row)
 
 
+def get_pr(con: sqlite3.Connection, repo: str, number: int) -> sqlite3.Row | None:
+    return con.execute(
+        "SELECT * FROM prs WHERE repo=? AND number=?", (repo, number)
+    ).fetchone()
+
+
+def get_comments(
+    con: sqlite3.Connection, repo: str, issue_number: int
+) -> list[sqlite3.Row]:
+    return con.execute(
+        "SELECT * FROM comments WHERE repo=? AND issue_number=?"
+        " ORDER BY created_at, comment_id",
+        (repo, issue_number),
+    ).fetchall()
+
+
 def upsert_comment(con: sqlite3.Connection, row: dict) -> None:
     _upsert(con, "comments", COMMENT_COLUMNS, ("repo", "comment_id"), row)
 
