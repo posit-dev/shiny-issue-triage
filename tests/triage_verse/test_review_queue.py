@@ -256,3 +256,54 @@ def test_issue_snippet_truncates_long_body():
 
 def test_issue_snippet_handles_missing_body():
     assert review_queue.issue_snippet("Title", None) == "Title"
+
+
+def test_duplicate_sibling_returns_other_issue():
+    proposal = {
+        "repo": "r/a",
+        "issue": 1,
+        "evidence": [
+            "https://github.com/r/a/issues/1",
+            "https://github.com/r/b/issues/2",
+        ],
+    }
+    assert review_queue.duplicate_sibling(proposal) == ("r/b", 2)
+
+
+def test_duplicate_sibling_handles_sibling_listed_first():
+    proposal = {
+        "repo": "r/a",
+        "issue": 1,
+        "evidence": [
+            "https://github.com/r/b/issues/2",
+            "https://github.com/r/a/issues/1",
+        ],
+    }
+    assert review_queue.duplicate_sibling(proposal) == ("r/b", 2)
+
+
+def test_duplicate_sibling_none_when_self_only():
+    proposal = {
+        "repo": "r/a",
+        "issue": 1,
+        "evidence": ["https://github.com/r/a/issues/1"],
+    }
+    assert review_queue.duplicate_sibling(proposal) is None
+
+
+def test_duplicate_sibling_none_when_evidence_missing():
+    assert review_queue.duplicate_sibling({"repo": "r/a", "issue": 1}) is None
+
+
+def test_duplicate_sibling_skips_malformed_urls():
+    proposal = {
+        "repo": "r/a",
+        "issue": 1,
+        "evidence": [
+            "not a url",
+            "https://github.com/r/b/pull/9",
+            "https://github.com/r/b/issues/not-a-number",
+            "https://github.com/r/b/issues/2",
+        ],
+    }
+    assert review_queue.duplicate_sibling(proposal) == ("r/b", 2)
