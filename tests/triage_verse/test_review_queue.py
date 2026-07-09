@@ -114,7 +114,7 @@ def test_load_undecided_missing_dirs_returns_empty(tmp_path):
     assert rows == []
 
 
-def test_load_undecided_excludes_out_of_scope_actions(tmp_path):
+def test_load_undecided_includes_close_actions(tmp_path):
     proposals_dir = tmp_path / "proposals"
     decisions_dir = tmp_path / "decisions"
     _write_jsonl(
@@ -132,19 +132,71 @@ def test_load_undecided_excludes_out_of_scope_actions(tmp_path):
                 "repo": "r/r",
                 "issue": 2,
                 "action": "close",
-                "confidence": 0.5,
+                "confidence": 0.7,
             },
             {
                 "id": "c",
                 "repo": "r/r",
                 "issue": 3,
                 "action": "close-duplicate",
+                "confidence": 0.6,
+            },
+        ],
+    )
+    rows = review_queue.load_undecided(proposals_dir, decisions_dir, _mirror(tmp_path))
+    assert [r["id"] for r in rows] == ["b", "c", "a"]
+
+
+def test_load_undecided_excludes_out_of_scope_actions(tmp_path):
+    proposals_dir = tmp_path / "proposals"
+    decisions_dir = tmp_path / "decisions"
+    _write_jsonl(
+        proposals_dir / "2026" / "W27.jsonl",
+        [
+            {
+                "id": "a",
+                "repo": "r/r",
+                "issue": 1,
+                "action": "add-label",
+                "confidence": 0.5,
+            },
+            {
+                "id": "b",
+                "repo": "r/r",
+                "issue": 2,
+                "action": "transfer",
                 "confidence": 0.5,
             },
         ],
     )
     rows = review_queue.load_undecided(proposals_dir, decisions_dir, _mirror(tmp_path))
     assert [r["id"] for r in rows] == ["a"]
+
+
+def test_close_proposal_leaves_queue_when_issue_closes(tmp_path):
+    proposals_dir = tmp_path / "proposals"
+    decisions_dir = tmp_path / "decisions"
+    _write_jsonl(
+        proposals_dir / "2026" / "W27.jsonl",
+        [
+            {
+                "id": "a",
+                "repo": "r/r",
+                "issue": 1,
+                "action": "close",
+                "confidence": 0.9,
+            }
+        ],
+    )
+    con = _mirror(tmp_path)
+    _seed_issue(con, "r/r", 1, "CLOSED")
+    rows = review_queue.load_undecided(proposals_dir, decisions_dir, con)
+    assert rows == []
+
+
+def test_high_stakes_actions_are_supported():
+    assert review_queue.HIGH_STAKES_ACTIONS <= review_queue.SUPPORTED_ACTIONS
+    assert review_queue.HIGH_STAKES_ACTIONS == frozenset({"close", "close-duplicate"})
 
 
 def test_load_undecided_excludes_closed_issues(tmp_path):

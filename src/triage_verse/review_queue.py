@@ -11,7 +11,12 @@ from . import db
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_ACTIONS = frozenset({"add-label", "set-priority"})
+SUPPORTED_ACTIONS = frozenset(
+    {"add-label", "set-priority", "close", "close-duplicate"}
+)
+# Actions that must be judged from the full-evidence drawer, never a row snippet
+# or bulk approve.
+HIGH_STAKES_ACTIONS = frozenset({"close", "close-duplicate"})
 
 
 def iter_jsonl_records(base_dir: str | pathlib.Path) -> list[dict]:
