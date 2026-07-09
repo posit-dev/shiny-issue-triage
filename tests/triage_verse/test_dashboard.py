@@ -110,6 +110,7 @@ def test_category_precision_per_action(tmp_path):
             {"action": "add-label", "verdict": "approved"},
             {"action": "add-label", "verdict": "approved"},
             {"action": "add-label", "verdict": "rejected"},
+            {"action": "add-label", "verdict": "edited"},
             {"action": "add-label", "verdict": "skipped"},
             {"action": "set-priority", "verdict": "skipped"},
             {"verdict": "approved"},  # missing action: skipped
@@ -119,13 +120,15 @@ def test_category_precision_per_action(tmp_path):
         {
             "action": "add-label",
             "approved": 2,
+            "edited": 1,
             "rejected": 1,
             "skipped": 1,
-            "precision": 2 / 3,
+            "precision": 2 / 4,
         },
         {
             "action": "set-priority",
             "approved": 0,
+            "edited": 0,
             "rejected": 0,
             "skipped": 1,
             "precision": None,

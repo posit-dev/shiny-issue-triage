@@ -417,10 +417,11 @@ def server(input: Inputs, output: Outputs, session: Session):
     def precision_ui():
         return _table(
             dashboard.category_precision(DECISIONS_DIR),
-            ["action", "approved", "rejected", "skipped", "precision"],
+            ["action", "approved", "edited", "rejected", "skipped", "precision"],
             lambda r: [
                 r["action"],
                 r["approved"],
+                r["edited"],
                 r["rejected"],
                 r["skipped"],
                 "—" if r["precision"] is None else f"{r['precision']:.0%}",

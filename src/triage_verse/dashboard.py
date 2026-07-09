@@ -67,7 +67,7 @@ def category_precision(decisions_dir: str | pathlib.Path) -> list[dict]:
     """Per action type: verdict counts and approval rate among judged rows.
 
     Skips are shown but excluded from the rate — a skip is "not judged",
-    not "wrong".
+    not "wrong". Edits are judged but not approved-as-proposed.
     """
     by_action: dict[str, Counter] = {}
     for r in iter_jsonl_records(decisions_dir):
@@ -76,11 +76,12 @@ def category_precision(decisions_dir: str | pathlib.Path) -> list[dict]:
     out = []
     for action in sorted(by_action):
         verdicts = by_action[action]
-        judged = verdicts["approved"] + verdicts["rejected"]
+        judged = verdicts["approved"] + verdicts["rejected"] + verdicts["edited"]
         out.append(
             {
                 "action": action,
                 "approved": verdicts["approved"],
+                "edited": verdicts["edited"],
                 "rejected": verdicts["rejected"],
                 "skipped": verdicts["skipped"],
                 "precision": verdicts["approved"] / judged if judged else None,
