@@ -36,7 +36,7 @@ The Plan 3a review queue shows each proposal with only a truncated title/body sn
 
 **Definition of done**
 
-1. Clicking a queue row's title opens the drawer with the full item from the mirror; the queue stays visible and interactive behind it; a close button (or clicking the backdrop) dismisses it.
+1. Clicking a queue row's title opens the drawer with the full item from the mirror; the queue stays visible behind a dimmed backdrop; a close button (or clicking the backdrop) dismisses it.
 2. PRs render with merged/state metadata and deep-link to `/pull/N`; items missing from the mirror show a "not found in mirror" drawer body instead of failing.
 3. `drawer.py` and `db.get_comments` have full offline unit coverage; the app wiring stays thin, verified manually (same stance as Plan 3a).
 
@@ -66,7 +66,7 @@ Following the existing 1:1 `src/triage_verse/<name>.py` ↔ `tests/triage_verse/
   - A `render.ui` drawer output: backdrop + fixed right-hand panel (`min(640px, 95vw)` wide, full height, scrollable) rendering the `drawer.load_item` result. Body and comment Markdown render via `ui.markdown` (raw HTML in bodies stays escaped by the CommonMark defaults). A "Proposal" section shows action + params, confidence, rationale, and the evidence URLs as links. A Close button and a backdrop click both clear `drawer_state`.
   - A static `ui.tags.style` block for the panel/backdrop/slide-in CSS.
 
-Data flow: click row title → `on_open` sets `drawer_state` → drawer `render.ui` calls `drawer.load_item` → user reads, optionally follows the GitHub link → Close clears `drawer_state`. Approve/Reject/Skip stay on the row, unchanged; deciding a row while its drawer is open removes the row and closes the drawer (its proposal is no longer under review).
+Data flow: click row title → `on_open` sets `drawer_state` → drawer `render.ui` calls `drawer.load_item` → user reads, optionally follows the GitHub link → Close (or the backdrop) clears `drawer_state`. While open, the backdrop intercepts clicks on the queue — the drawer is modal; the first click outside dismisses it. Approve/Reject/Skip stay on the row, unchanged; `on_decide` still clears the drawer when its proposal is decided (reachable via "Approve visible rows" today, and via the Plan 3e keyboard flow later).
 
 ## 5. Error handling
 
