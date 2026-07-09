@@ -1,13 +1,13 @@
 {
   "rstudio/reactlog":   { "createdAt": "2026-05-18T09:27:02Z", "updatedAt": "2026-05-18T09:37:05Z" },
-  "rstudio/shiny":      { "createdAt": "2026-06-29T15:05:25Z", "updatedAt": "2026-06-29T17:48:13Z" },
-  "rstudio/bslib":      { "createdAt": "2026-06-29T12:29:21Z", "updatedAt": "2026-07-01T17:08:22Z" },
+  "rstudio/shiny":      { "createdAt": "2026-06-29T15:05:25Z", "updatedAt": "2026-07-02T09:21:27Z" },
+  "rstudio/bslib":      { "createdAt": "2026-07-08T07:11:47Z", "updatedAt": "2026-07-08T11:49:44Z" },
   "rstudio/leaflet":    { "createdAt": "2026-04-30T00:00:00Z", "updatedAt": "2026-04-30T00:00:00Z" },
   "rstudio/htmltools":  { "createdAt": "2026-04-30T00:00:00Z", "updatedAt": "2026-06-05T12:51:26Z" },
   "rstudio/shinytest2": { "createdAt": "2026-06-09T12:49:24Z", "updatedAt": "2026-06-18T07:46:38Z" },
   "rstudio/plumber":    { "createdAt": "2026-04-30T00:00:00Z", "updatedAt": "2026-04-30T00:00:00Z" },
   "rstudio/promises":   { "createdAt": "2026-04-30T00:00:00Z", "updatedAt": "2026-04-30T00:00:00Z" },
-  "posit-dev/py-shiny": { "createdAt": "2026-06-15T21:16:51Z", "updatedAt": "2026-06-28T07:24:43Z" },
-  "posit-dev/chatlas":  { "createdAt": "2026-06-27T21:21:31Z", "updatedAt": "2026-06-27T21:21:31Z" },
-  "posit-dev/shinychat":{ "createdAt": "2026-06-24T14:58:04Z", "updatedAt": "2026-06-25T15:53:34Z" }
+  "posit-dev/py-shiny": { "createdAt": "2026-07-06T18:29:32Z", "updatedAt": "2026-07-08T21:44:52Z" },
+  "posit-dev/chatlas":  { "createdAt": "2026-07-08T03:01:05Z", "updatedAt": "2026-07-08T03:01:05Z" },
+  "posit-dev/shinychat":{ "createdAt": "2026-07-04T16:01:35Z", "updatedAt": "2026-07-04T16:01:35Z" }
 }
