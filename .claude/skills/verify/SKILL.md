@@ -18,8 +18,9 @@ SEED=$(mktemp -d)
 # seed with a small python script: db.connect(f"{SEED}/mirror.sqlite"), then
 # db.upsert_issue / upsert_comment / upsert_pr rows, con.commit(), and write
 # proposal records ({id, repo, issue, action, params, rationale, confidence,
-# evidence}) to $SEED/proposals/2026/W27.jsonl. Only add-label / set-priority
-# actions on OPEN issues appear in the queue (review_queue.SUPPORTED_ACTIONS).
+# evidence}) to $SEED/proposals/2026/W27.jsonl. Only SUPPORTED_ACTIONS on OPEN
+# issues appear in the queue; proposal ids must be [A-Za-z0-9_] only (they
+# become Shiny module ids — hyphens crash the queue render).
 TRIAGE_VERSE_DB=$SEED/mirror.sqlite \
 TRIAGE_VERSE_PROPOSALS=$SEED/proposals \
 TRIAGE_VERSE_DECISIONS=$SEED/decisions \

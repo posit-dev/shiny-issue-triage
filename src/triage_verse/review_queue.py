@@ -5,13 +5,17 @@ from __future__ import annotations
 import json
 import logging
 import pathlib
+import re
 import sqlite3
 
 from . import db
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_ACTIONS = frozenset({"add-label", "set-priority"})
+SUPPORTED_ACTIONS = frozenset({"add-label", "set-priority", "close", "close-duplicate"})
+# Actions that must be judged from the full-evidence drawer, never a row snippet
+# or bulk approve.
+HIGH_STAKES_ACTIONS = frozenset({"close", "close-duplicate"})
 
 # Browser KeyboardEvent.key -> review action. Mirrored into the app's JS
 # keydown listener via json.dumps so the binding lives in exactly one place.
@@ -79,6 +83,21 @@ def load_undecided(
         and not _is_closed(con, r["repo"], r["issue"])
     ]
     return sorted(proposals, key=lambda r: r.get("confidence", 0.0), reverse=True)
+
+
+_EVIDENCE_URL = re.compile(r"^https://github\.com/([^/]+/[^/]+)/issues/(\d+)$")
+
+
+def duplicate_sibling(proposal: dict) -> tuple[str, int] | None:
+    """The other issue of a close-duplicate pair, from the proposal's evidence URLs."""
+    for url in proposal.get("evidence") or []:
+        m = _EVIDENCE_URL.match(url)
+        if m is None:
+            continue
+        repo, number = m.group(1), int(m.group(2))
+        if (repo, number) != (proposal["repo"], proposal["issue"]):
+            return repo, number
+    return None
 
 
 def issue_snippet(title: str, body: str | None, max_chars: int = 280) -> str:

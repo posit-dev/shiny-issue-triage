@@ -114,7 +114,7 @@ def test_load_undecided_missing_dirs_returns_empty(tmp_path):
     assert rows == []
 
 
-def test_load_undecided_excludes_out_of_scope_actions(tmp_path):
+def test_load_undecided_includes_close_actions(tmp_path):
     proposals_dir = tmp_path / "proposals"
     decisions_dir = tmp_path / "decisions"
     _write_jsonl(
@@ -132,19 +132,71 @@ def test_load_undecided_excludes_out_of_scope_actions(tmp_path):
                 "repo": "r/r",
                 "issue": 2,
                 "action": "close",
-                "confidence": 0.5,
+                "confidence": 0.7,
             },
             {
                 "id": "c",
                 "repo": "r/r",
                 "issue": 3,
                 "action": "close-duplicate",
+                "confidence": 0.6,
+            },
+        ],
+    )
+    rows = review_queue.load_undecided(proposals_dir, decisions_dir, _mirror(tmp_path))
+    assert [r["id"] for r in rows] == ["b", "c", "a"]
+
+
+def test_load_undecided_excludes_out_of_scope_actions(tmp_path):
+    proposals_dir = tmp_path / "proposals"
+    decisions_dir = tmp_path / "decisions"
+    _write_jsonl(
+        proposals_dir / "2026" / "W27.jsonl",
+        [
+            {
+                "id": "a",
+                "repo": "r/r",
+                "issue": 1,
+                "action": "add-label",
+                "confidence": 0.5,
+            },
+            {
+                "id": "b",
+                "repo": "r/r",
+                "issue": 2,
+                "action": "transfer",
                 "confidence": 0.5,
             },
         ],
     )
     rows = review_queue.load_undecided(proposals_dir, decisions_dir, _mirror(tmp_path))
     assert [r["id"] for r in rows] == ["a"]
+
+
+def test_close_proposal_leaves_queue_when_issue_closes(tmp_path):
+    proposals_dir = tmp_path / "proposals"
+    decisions_dir = tmp_path / "decisions"
+    _write_jsonl(
+        proposals_dir / "2026" / "W27.jsonl",
+        [
+            {
+                "id": "a",
+                "repo": "r/r",
+                "issue": 1,
+                "action": "close",
+                "confidence": 0.9,
+            }
+        ],
+    )
+    con = _mirror(tmp_path)
+    _seed_issue(con, "r/r", 1, "CLOSED")
+    rows = review_queue.load_undecided(proposals_dir, decisions_dir, con)
+    assert rows == []
+
+
+def test_high_stakes_actions_are_supported():
+    assert review_queue.HIGH_STAKES_ACTIONS <= review_queue.SUPPORTED_ACTIONS
+    assert review_queue.HIGH_STAKES_ACTIONS == frozenset({"close", "close-duplicate"})
 
 
 def test_load_undecided_excludes_closed_issues(tmp_path):
@@ -204,6 +256,57 @@ def test_issue_snippet_truncates_long_body():
 
 def test_issue_snippet_handles_missing_body():
     assert review_queue.issue_snippet("Title", None) == "Title"
+
+
+def test_duplicate_sibling_returns_other_issue():
+    proposal = {
+        "repo": "r/a",
+        "issue": 1,
+        "evidence": [
+            "https://github.com/r/a/issues/1",
+            "https://github.com/r/b/issues/2",
+        ],
+    }
+    assert review_queue.duplicate_sibling(proposal) == ("r/b", 2)
+
+
+def test_duplicate_sibling_handles_sibling_listed_first():
+    proposal = {
+        "repo": "r/a",
+        "issue": 1,
+        "evidence": [
+            "https://github.com/r/b/issues/2",
+            "https://github.com/r/a/issues/1",
+        ],
+    }
+    assert review_queue.duplicate_sibling(proposal) == ("r/b", 2)
+
+
+def test_duplicate_sibling_none_when_self_only():
+    proposal = {
+        "repo": "r/a",
+        "issue": 1,
+        "evidence": ["https://github.com/r/a/issues/1"],
+    }
+    assert review_queue.duplicate_sibling(proposal) is None
+
+
+def test_duplicate_sibling_none_when_evidence_missing():
+    assert review_queue.duplicate_sibling({"repo": "r/a", "issue": 1}) is None
+
+
+def test_duplicate_sibling_skips_malformed_urls():
+    proposal = {
+        "repo": "r/a",
+        "issue": 1,
+        "evidence": [
+            "not a url",
+            "https://github.com/r/b/pull/9",
+            "https://github.com/r/b/issues/not-a-number",
+            "https://github.com/r/b/issues/2",
+        ],
+    }
+    assert review_queue.duplicate_sibling(proposal) == ("r/b", 2)
 
 
 def test_key_actions_cover_documented_bindings():

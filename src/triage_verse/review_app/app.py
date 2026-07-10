@@ -76,12 +76,31 @@ def _row_snippet(proposal: dict) -> str:
 
 @module.ui
 def row_ui(proposal: dict, snippet: str):
-    return ui.card(
-        ui.card_header(ui.input_action_link("open", _row_label(proposal))),
-        ui.p(f"confidence: {proposal.get('confidence', 0.0):.2f}"),
-        ui.p(proposal.get("rationale") or ""),
-        ui.pre(snippet),
-        ui.div(
+    high_stakes = proposal["action"] in review_queue.HIGH_STAKES_ACTIONS
+    header: list = [ui.input_action_link("open", _row_label(proposal))]
+    if high_stakes:
+        header.insert(
+            0,
+            ui.span(
+                proposal["action"],
+                style=(
+                    "background-color: #c62828; color: white; border-radius: 999px; "
+                    "padding: 0 0.5rem; margin-right: 0.5rem; font-size: 0.8rem;"
+                ),
+            ),
+        )
+        buttons = [
+            ui.input_action_button(
+                "open_evidence",
+                "Review evidence",
+                style="background-color: #1565c0; color: white;",
+            ),
+            ui.input_action_button(
+                "skip", "Skip", style="background-color: #757575; color: white;"
+            ),
+        ]
+    else:
+        buttons = [
             ui.input_action_button(
                 "approve", "Approve", style="background-color: #2e7d32; color: white;"
             ),
@@ -94,8 +113,13 @@ def row_ui(proposal: dict, snippet: str):
             ui.input_action_button(
                 "skip", "Skip", style="background-color: #757575; color: white;"
             ),
-            style="display: flex; gap: 0.5rem;",
-        ),
+        ]
+    return ui.card(
+        ui.card_header(*header),
+        ui.p(f"confidence: {proposal.get('confidence', 0.0):.2f}"),
+        ui.p(proposal.get("rationale") or ""),
+        ui.pre(snippet),
+        ui.div(*buttons, style="display: flex; gap: 0.5rem;"),
     )
 
 
@@ -112,6 +136,11 @@ def row_server(
     @reactive.effect
     @reactive.event(input.open)
     def _open():
+        on_open(proposal)
+
+    @reactive.effect
+    @reactive.event(input.open_evidence)
+    def _open_evidence():
         on_open(proposal)
 
     @reactive.effect
@@ -227,12 +256,69 @@ def _drawer_comments(item: dict) -> list:
     return parts
 
 
+def _close_duplicate_params(params: dict) -> str:
+    canonical = params.get("canonical")
+    bits = [f"canonical: {canonical or '(not stated)'}"]
+    if params.get("cross_repo_option"):
+        bits.append(f"cross-repo: {params['cross_repo_option']}")
+    return " · ".join(bits)
+
+
+def _drawer_sibling(proposal: dict) -> list:
+    parts = [ui.h4("Duplicate sibling")]
+    sibling = review_queue.duplicate_sibling(proposal)
+    if sibling is None:
+        parts.append(ui.p("(sibling not identified from evidence)"))
+        return parts
+    repo, number = sibling
+    item = drawer.load_item(_con, repo, number)
+    if item is None:
+        github_url = f"https://github.com/{repo}/issues/{number}"
+        parts += [
+            ui.p(f"{repo}#{number} — (not found in mirror)"),
+            ui.p(ui.a("Open on GitHub ↗", href=github_url, target="_blank")),
+        ]
+        return parts
+    parts += [
+        ui.h5(f"{repo}#{number}: {item['title']}"),
+        ui.p(_drawer_meta_line(item), class_="drawer-meta"),
+        ui.div(*[ui.span(label, class_="drawer-label") for label in item["labels"]]),
+        ui.pre(review_queue.issue_snippet(item["title"], item["body"])),
+        ui.p(ui.a("Open on GitHub ↗", href=item["github_url"], target="_blank")),
+    ]
+    return parts
+
+
 def _drawer_proposal(proposal: dict) -> list:
-    return [
+    if proposal["action"] == "close-duplicate":
+        params_line = _close_duplicate_params(proposal["params"])
+    else:
+        params_line = str(proposal["params"])
+    parts = [
         ui.h4("Proposal"),
-        ui.p(f"{proposal['action']}: {proposal['params']}"),
+        ui.p(f"{proposal['action']}: {params_line}"),
         ui.p(f"confidence: {proposal.get('confidence', 0.0):.2f}"),
         ui.p(proposal.get("rationale") or "(no rationale)"),
+        ui.div(
+            ui.input_action_button(
+                "drawer_approve",
+                "Approve",
+                style="background-color: #2e7d32; color: white;",
+            ),
+            ui.input_action_button(
+                "drawer_reject",
+                "Reject",
+                style="background-color: #c62828; color: white;",
+            ),
+            ui.input_action_button(
+                "drawer_skip", "Skip", style="background-color: #757575; color: white;"
+            ),
+            style="display: flex; gap: 0.5rem; margin-bottom: 0.75rem;",
+        ),
+    ]
+    if proposal["action"] == "close-duplicate":
+        parts += _drawer_sibling(proposal)
+    parts += [
         ui.h4("Linked evidence"),
         ui.tags.ul(
             *[
@@ -241,6 +327,7 @@ def _drawer_proposal(proposal: dict) -> list:
             ]
         ),
     ]
+    return parts
 
 
 def _drawer_panel(state: dict, item: dict | None):
@@ -296,7 +383,9 @@ app_ui = ui.page_navbar(
             " · o/Enter open · Esc close",
             class_="text-muted",
         ),
-        ui.input_action_button("approve_visible", "Approve visible rows"),
+        ui.input_action_button(
+            "approve_visible", "Approve visible label/priority rows"
+        ),
         ui.output_ui("queue_ui"),
         ui.output_ui("drawer_ui"),
     ),
@@ -384,14 +473,26 @@ def server(input: Inputs, output: Outputs, session: Session):
             selected.set(review_queue.clamp_index(sel + 1, len(rows)))
         elif action == "prev":
             selected.set(review_queue.clamp_index(sel - 1, len(rows)))
-        elif action == "approve":
-            on_decide(rows[sel], "approved")
-        elif action == "reject":
-            on_decide(rows[sel], "rejected")
+        elif action in ("approve", "reject"):
+            proposal = rows[sel]
+            state = drawer_state.get()
+            evidence_open = (
+                state is not None and state["proposal"]["id"] == proposal["id"]
+            )
+            if (
+                proposal["action"] in review_queue.HIGH_STAKES_ACTIONS
+                and not evidence_open
+            ):
+                # High-stakes actions are only decidable with the evidence on
+                # screen — route the keypress to the drawer instead.
+                on_open(proposal)
+            else:
+                on_decide(proposal, "approved" if action == "approve" else "rejected")
         elif action == "skip":
             on_decide(rows[sel], "skipped")
         elif action == "edit":
-            on_edit(rows[sel])
+            if rows[sel]["action"] not in review_queue.HIGH_STAKES_ACTIONS:
+                on_edit(rows[sel])
         elif action == "open":
             on_open(rows[sel])
 
@@ -446,11 +547,36 @@ def server(input: Inputs, output: Outputs, session: Session):
     def _drawer_close():
         drawer_state.set(None)
 
+    def _decide_from_drawer(verdict: str) -> None:
+        state = drawer_state.get()
+        if state is not None:
+            on_decide(state["proposal"], verdict)
+
+    @reactive.effect
+    @reactive.event(input.drawer_approve)
+    def _drawer_approve():
+        _decide_from_drawer("approved")
+
+    @reactive.effect
+    @reactive.event(input.drawer_reject)
+    def _drawer_reject():
+        _decide_from_drawer("rejected")
+
+    @reactive.effect
+    @reactive.event(input.drawer_skip)
+    def _drawer_skip():
+        _decide_from_drawer("skipped")
+
     @reactive.effect
     @reactive.event(input.approve_visible)
     def _approve_visible():
         decisions.write(
-            [decisions.record(p, "approved") for p in queue.get()], DECISIONS_DIR
+            [
+                decisions.record(p, "approved")
+                for p in queue.get()
+                if p["action"] not in review_queue.HIGH_STAKES_ACTIONS
+            ],
+            DECISIONS_DIR,
         )
         drawer_state.set(None)
         refresh()
