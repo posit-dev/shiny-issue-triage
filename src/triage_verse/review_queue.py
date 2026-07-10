@@ -17,6 +17,29 @@ SUPPORTED_ACTIONS = frozenset({"add-label", "set-priority", "close", "close-dupl
 # or bulk approve.
 HIGH_STAKES_ACTIONS = frozenset({"close", "close-duplicate"})
 
+# Browser KeyboardEvent.key -> review action. Mirrored into the app's JS
+# keydown listener via json.dumps so the binding lives in exactly one place.
+KEY_ACTIONS = {
+    "j": "next",
+    "k": "prev",
+    "a": "approve",
+    "r": "reject",
+    "s": "skip",
+    "e": "edit",
+    "o": "open",
+    "Enter": "open",
+    "Escape": "close",
+}
+
+
+def clamp_index(index: int | None, length: int) -> int | None:
+    """Clamp a selection index to a queue of `length`; None means no selection."""
+    if length <= 0:
+        return None
+    if index is None:
+        return 0
+    return max(0, min(index, length - 1))
+
 
 def iter_jsonl_records(base_dir: str | pathlib.Path) -> list[dict]:
     base = pathlib.Path(base_dir)

@@ -307,3 +307,26 @@ def test_duplicate_sibling_skips_malformed_urls():
         ],
     }
     assert review_queue.duplicate_sibling(proposal) == ("r/b", 2)
+
+
+def test_key_actions_cover_documented_bindings():
+    assert review_queue.KEY_ACTIONS == {
+        "j": "next",
+        "k": "prev",
+        "a": "approve",
+        "r": "reject",
+        "s": "skip",
+        "e": "edit",
+        "o": "open",
+        "Enter": "open",
+        "Escape": "close",
+    }
+
+
+def test_clamp_index():
+    assert review_queue.clamp_index(None, 0) is None
+    assert review_queue.clamp_index(3, 0) is None
+    assert review_queue.clamp_index(None, 5) == 0
+    assert review_queue.clamp_index(-1, 5) == 0
+    assert review_queue.clamp_index(2, 5) == 2
+    assert review_queue.clamp_index(7, 5) == 4  # queue shrank under selection
