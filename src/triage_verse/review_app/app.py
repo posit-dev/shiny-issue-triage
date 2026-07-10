@@ -6,6 +6,7 @@ Run with: shiny run src/triage_verse/review_app/app.py
 
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 from typing import Callable
@@ -46,6 +47,21 @@ _DRAWER_CSS = """
 }
 """
 
+_KB_CSS = """
+.kb-selected > .card { outline: 3px solid #0969da; outline-offset: -1px; }
+"""
+
+_KB_JS = """
+document.addEventListener("keydown", (e) => {
+  const actions = %s;
+  if (!(e.key in actions)) return;
+  if (e.target.closest("input, textarea, select, [contenteditable='true']")) return;
+  if (document.querySelector(".modal.show")) return;
+  e.preventDefault();
+  Shiny.setInputValue("key_action", actions[e.key], {priority: "event"});
+});
+""" % json.dumps(review_queue.KEY_ACTIONS)
+
 
 def _row_label(proposal: dict) -> str:
     return f"{proposal['repo']}#{proposal['issue']} — {proposal['action']}: {proposal['params']}"
@@ -73,6 +89,9 @@ def row_ui(proposal: dict, snippet: str):
                 "reject", "Reject", style="background-color: #c62828; color: white;"
             ),
             ui.input_action_button(
+                "edit", "Edit", style="background-color: #f9a825; color: black;"
+            ),
+            ui.input_action_button(
                 "skip", "Skip", style="background-color: #757575; color: white;"
             ),
             style="display: flex; gap: 0.5rem;",
@@ -88,6 +107,7 @@ def row_server(
     proposal: dict,
     on_decide: Callable[[dict, str], None],
     on_open: Callable[[dict], None],
+    on_edit: Callable[[dict], None],
 ):
     @reactive.effect
     @reactive.event(input.open)
@@ -108,6 +128,11 @@ def row_server(
     @reactive.event(input.skip)
     def _skip():
         on_decide(proposal, "skipped")
+
+    @reactive.effect
+    @reactive.event(input.edit)
+    def _edit():
+        on_edit(proposal)
 
 
 def _table(rows: list[dict], columns: list[str], format_row=None) -> ui.Tag:
@@ -266,13 +291,18 @@ def _drawer_panel(state: dict, item: dict | None):
 app_ui = ui.page_navbar(
     ui.nav_panel(
         "Queue",
+        ui.p(
+            "Keys: j/k select · a approve · r reject · s skip · e edit"
+            " · o/Enter open · Esc close",
+            class_="text-muted",
+        ),
         ui.input_action_button("approve_visible", "Approve visible rows"),
         ui.output_ui("queue_ui"),
         ui.output_ui("drawer_ui"),
     ),
     dashboard_panel,
     title="Triage review",
-    header=ui.tags.style(_DRAWER_CSS),
+    header=ui.TagList(ui.tags.style(_DRAWER_CSS + _KB_CSS), ui.tags.script(_KB_JS)),
 )
 
 
@@ -281,13 +311,17 @@ def server(input: Inputs, output: Outputs, session: Session):
         review_queue.load_undecided(PROPOSALS_DIR, DECISIONS_DIR, _con)
     )
     drawer_state = reactive.value[dict | None](None)
+    selected = reactive.value[int | None](None)
+    edit_target = reactive.value[dict | None](None)
     wired: set[str] = set()
 
     def refresh() -> None:
         queue.set(review_queue.load_undecided(PROPOSALS_DIR, DECISIONS_DIR, _con))
 
-    def on_decide(proposal: dict, verdict: str) -> None:
-        decisions.write([decisions.record(proposal, verdict)], DECISIONS_DIR)
+    def on_decide(proposal: dict, verdict: str, params: dict | None = None) -> None:
+        decisions.write(
+            [decisions.record(proposal, verdict, params=params)], DECISIONS_DIR
+        )
         state = drawer_state.get()
         if state is not None and state["proposal"]["id"] == proposal["id"]:
             drawer_state.set(None)
@@ -302,20 +336,95 @@ def server(input: Inputs, output: Outputs, session: Session):
             }
         )
 
+    def on_edit(proposal: dict) -> None:
+        edit_target.set(proposal)
+        ui.modal_show(
+            ui.modal(
+                ui.p(_row_label(proposal)),
+                *[
+                    ui.input_text(f"edit_{key}", key, value=str(value))
+                    for key, value in proposal["params"].items()
+                ],
+                title="Edit proposal",
+                footer=[
+                    ui.input_action_button(
+                        "edit_save", "Approve edited", class_="btn btn-success"
+                    ),
+                    ui.modal_button("Cancel"),
+                ],
+                easy_close=True,
+            )
+        )
+
+    @reactive.effect
+    @reactive.event(input.edit_save)
+    def _edit_save():
+        proposal = edit_target.get()
+        if proposal is None:
+            return
+        params = {key: input[f"edit_{key}"]().strip() for key in proposal["params"]}
+        if any(not v for v in params.values()):
+            return  # keep the modal open until every field has a value
+        edit_target.set(None)
+        ui.modal_remove()
+        on_decide(proposal, "edited", params=params)
+
+    @reactive.effect
+    @reactive.event(input.key_action)
+    def _key_action():
+        action = input.key_action()
+        if action == "close":
+            drawer_state.set(None)
+            return
+        rows = queue.get()
+        sel = review_queue.clamp_index(selected.get(), len(rows))
+        if sel is None:
+            return
+        if action == "next":
+            selected.set(review_queue.clamp_index(sel + 1, len(rows)))
+        elif action == "prev":
+            selected.set(review_queue.clamp_index(sel - 1, len(rows)))
+        elif action == "approve":
+            on_decide(rows[sel], "approved")
+        elif action == "reject":
+            on_decide(rows[sel], "rejected")
+        elif action == "skip":
+            on_decide(rows[sel], "skipped")
+        elif action == "edit":
+            on_edit(rows[sel])
+        elif action == "open":
+            on_open(rows[sel])
+
     @render.ui
     def queue_ui():
         rows = queue.get()
         if not rows:
             return ui.p("Queue empty — nothing to review.")
+        sel = review_queue.clamp_index(selected.get(), len(rows))
         cards = []
-        for proposal in rows:
+        for i, proposal in enumerate(rows):
             row_id = proposal["id"]
             if row_id not in wired:
                 row_server(
-                    row_id, proposal=proposal, on_decide=on_decide, on_open=on_open
+                    row_id,
+                    proposal=proposal,
+                    on_decide=on_decide,
+                    on_open=on_open,
+                    on_edit=on_edit,
                 )
                 wired.add(row_id)
-            cards.append(row_ui(row_id, proposal, _row_snippet(proposal)))
+            cards.append(
+                ui.div(
+                    row_ui(row_id, proposal, _row_snippet(proposal)),
+                    class_="kb-selected" if i == sel else None,
+                )
+            )
+        cards.append(
+            ui.tags.script(
+                "document.querySelector('.kb-selected')"
+                "?.scrollIntoView({block: 'nearest'});"
+            )
+        )
         return ui.div(*cards)
 
     @render.ui
@@ -417,10 +526,11 @@ def server(input: Inputs, output: Outputs, session: Session):
     def precision_ui():
         return _table(
             dashboard.category_precision(DECISIONS_DIR),
-            ["action", "approved", "rejected", "skipped", "precision"],
+            ["action", "approved", "edited", "rejected", "skipped", "precision"],
             lambda r: [
                 r["action"],
                 r["approved"],
+                r["edited"],
                 r["rejected"],
                 r["skipped"],
                 "—" if r["precision"] is None else f"{r['precision']:.0%}",

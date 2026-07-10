@@ -204,3 +204,26 @@ def test_issue_snippet_truncates_long_body():
 
 def test_issue_snippet_handles_missing_body():
     assert review_queue.issue_snippet("Title", None) == "Title"
+
+
+def test_key_actions_cover_documented_bindings():
+    assert review_queue.KEY_ACTIONS == {
+        "j": "next",
+        "k": "prev",
+        "a": "approve",
+        "r": "reject",
+        "s": "skip",
+        "e": "edit",
+        "o": "open",
+        "Enter": "open",
+        "Escape": "close",
+    }
+
+
+def test_clamp_index():
+    assert review_queue.clamp_index(None, 0) is None
+    assert review_queue.clamp_index(3, 0) is None
+    assert review_queue.clamp_index(None, 5) == 0
+    assert review_queue.clamp_index(-1, 5) == 0
+    assert review_queue.clamp_index(2, 5) == 2
+    assert review_queue.clamp_index(7, 5) == 4  # queue shrank under selection
