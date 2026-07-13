@@ -62,5 +62,20 @@ checked before every new dispatch, bounding a tripped budget's overshoot
 use `--limit` to additionally bound a single run's spend (each call costs
 roughly $0.01-0.02).
 
+## Executor pipeline (P3)
+
+Applies approved review decisions to GitHub and can reverse a batch afterward.
+
+```bash
+uv run triage-verse execute                       # dry-run: preview mutations, no changes
+uv run triage-verse execute --apply                # apply approved proposals to GitHub
+uv run triage-verse undo --batch <id>               # dry-run: preview the reversal
+uv run triage-verse undo --batch <id> --apply       # reverse a batch: labels restored, issues reopened, executor comments deleted
+```
+
+`execute` is dry-run by default; pass `--apply` to mutate. Each issue is
+freshness-checked before mutation, and results append to `.data/results/`.
+`undo` is also dry-run by default and reverses a previously executed batch.
+
 Design: `docs/superpowers/specs/2026-06-12-shinyverse-issue-triage-design.md`.
 Open followups: `docs/superpowers/plans/2026-06-12-triage-verse-followups.md`.

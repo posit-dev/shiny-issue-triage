@@ -117,7 +117,10 @@ def test_close_maps_reason_and_comments(reason, gh_reason, template_word):
 
 def test_close_reason_duplicate_is_an_error():
     muts, err = executor.plan_decision(
-        _decision("close", {"reason": "duplicate"}), _issue(), allowed=ALLOWED, tmpl=TMPL
+        _decision("close", {"reason": "duplicate"}),
+        _issue(),
+        allowed=ALLOWED,
+        tmpl=TMPL,
     )
     assert muts == [] and "close-duplicate" in err
 

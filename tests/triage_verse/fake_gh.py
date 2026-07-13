@@ -43,9 +43,7 @@ class FakeGh:
         m = re.match(r"repos/([\w.-]+/[\w.-]+)/issues/(\d+)/comments$", path)
         if m:  # POST comment: gh api repos/.../comments -f body=...
             self.mutating_calls.append(args)
-            body = next(
-                a[len("body=") :] for a in args if a.startswith("body=")
-            )
+            body = next(a[len("body=") :] for a in args if a.startswith("body="))
             cid = self._next_comment_id
             self._next_comment_id += 1
             self.comments[cid] = {
@@ -101,7 +99,9 @@ class FakeGh:
         elif args[1] == "close":
             issue["state"] = "closed"
             reason = args[args.index("--reason") + 1]
-            issue["state_reason"] = "completed" if reason == "completed" else "not_planned"
+            issue["state_reason"] = (
+                "completed" if reason == "completed" else "not_planned"
+            )
         elif args[1] == "reopen":
             issue["state"] = "open"
             issue["state_reason"] = "reopened"

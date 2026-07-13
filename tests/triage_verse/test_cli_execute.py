@@ -10,8 +10,15 @@ def test_execute_defaults_to_dry_run_and_env_dirs(monkeypatch, tmp_path):
 
     def fake_execute(con, **kwargs):
         seen.update(kwargs)
-        return {"batch_id": "b1", "counts": {"applied": 0, "dry-run": 2,
-                                             "stale-needs-rereview": 0, "error": 0}}
+        return {
+            "batch_id": "b1",
+            "counts": {
+                "applied": 0,
+                "dry-run": 2,
+                "stale-needs-rereview": 0,
+                "error": 0,
+            },
+        }
 
     monkeypatch.setattr(executor, "execute", fake_execute)
     rc = cli.main(["execute"])
@@ -28,8 +35,15 @@ def test_execute_apply_flag_and_error_exit_code(monkeypatch, tmp_path):
 
     def fake_execute(con, **kwargs):
         seen.update(kwargs)
-        return {"batch_id": "b1", "counts": {"applied": 1, "dry-run": 0,
-                                             "stale-needs-rereview": 0, "error": 1}}
+        return {
+            "batch_id": "b1",
+            "counts": {
+                "applied": 1,
+                "dry-run": 0,
+                "stale-needs-rereview": 0,
+                "error": 1,
+            },
+        }
 
     monkeypatch.setattr(executor, "execute", fake_execute)
     rc = cli.main(["execute", "--apply", "--repo", "o/r", "--limit", "5"])
@@ -43,8 +57,10 @@ def test_undo_requires_batch_and_passes_flags(monkeypatch, tmp_path):
 
     def fake_undo(con, **kwargs):
         seen.update(kwargs)
-        return {"batch_id": "u1", "counts": {"applied": 0, "dry-run": 1,
-                                             "error": 0, "skipped": 0}}
+        return {
+            "batch_id": "u1",
+            "counts": {"applied": 0, "dry-run": 1, "error": 0, "skipped": 0},
+        }
 
     monkeypatch.setattr(executor, "undo", fake_undo)
     rc = cli.main(["undo", "--batch", "abc123", "--issue", "o/r#7"])

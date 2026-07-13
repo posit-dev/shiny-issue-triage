@@ -1,10 +1,9 @@
 """Round-trip tests for executor.undo."""
 
 import importlib.util
-import json
 import pathlib
 
-from triage_verse import db, decisions, executor, jsonl_log, review_queue
+from triage_verse import db, decisions, executor, jsonl_log
 
 _spec = importlib.util.spec_from_file_location(
     "fake_gh", pathlib.Path(__file__).parent / "fake_gh.py"
@@ -18,15 +17,28 @@ UPDATED = "2026-07-01T00:00:00Z"
 
 def _proposal(pid, action, params, issue=1):
     return {
-        "id": pid, "repo": "o/r", "issue": issue, "issue_updated_at": UPDATED,
-        "run_id": "run1", "model": "m", "confidence": 0.9, "evidence": [],
-        "action": action, "params": params, "rationale": "",
+        "id": pid,
+        "repo": "o/r",
+        "issue": issue,
+        "issue_updated_at": UPDATED,
+        "run_id": "run1",
+        "model": "m",
+        "confidence": 0.9,
+        "evidence": [],
+        "action": action,
+        "params": params,
+        "rationale": "",
     }
 
 
 def _issue(labels=(), node="N1"):
-    return {"labels": list(labels), "state": "open", "state_reason": None,
-            "updated_at": UPDATED, "node_id": node}
+    return {
+        "labels": list(labels),
+        "state": "open",
+        "state_reason": None,
+        "updated_at": UPDATED,
+        "node_id": node,
+    }
 
 
 def _run_batch(tmp_path, proposal_records, gh):
@@ -47,16 +59,19 @@ def _run_batch(tmp_path, proposal_records, gh):
             " created_at, labels_json) VALUES (?,?,?,?,?,?,?)",
             (p["repo"], p["issue"], "t", "OPEN", UPDATED, UPDATED, "[]"),
         )
-    summary = executor.execute(con, run_gh=gh, apply=True, pace=lambda s: None,
-                               log=lambda *a: None, **dirs)
+    summary = executor.execute(
+        con, run_gh=gh, apply=True, pace=lambda s: None, log=lambda *a: None, **dirs
+    )
     return con, dirs, summary["batch_id"]
 
 
 def test_undo_round_trip_restores_labels_state_and_comments(tmp_path):
-    gh = FakeGh({
-        ("o/r", 1): _issue(labels=["Priority: Low", "bug"]),
-        ("o/r", 2): _issue(node="N2"),
-    })
+    gh = FakeGh(
+        {
+            ("o/r", 1): _issue(labels=["Priority: Low", "bug"]),
+            ("o/r", 2): _issue(node="N2"),
+        }
+    )
     con, dirs, batch_id = _run_batch(
         tmp_path,
         [
@@ -70,8 +85,13 @@ def test_undo_round_trip_restores_labels_state_and_comments(tmp_path):
     assert len(gh.comments) == 1
 
     summary = executor.undo(
-        con, results_dir=dirs["results_dir"], batch_id=batch_id,
-        run_gh=gh, apply=True, pace=lambda s: None, log=lambda *a: None,
+        con,
+        results_dir=dirs["results_dir"],
+        batch_id=batch_id,
+        run_gh=gh,
+        apply=True,
+        pace=lambda s: None,
+        log=lambda *a: None,
     )
     assert summary["counts"]["applied"] == 2
     assert sorted(gh.issues[("o/r", 1)]["labels"]) == ["Priority: Low", "bug"]
@@ -88,8 +108,12 @@ def test_undo_dry_run_by_default(tmp_path):
     )
     before = len(gh.mutating_calls)
     summary = executor.undo(
-        con, results_dir=dirs["results_dir"], batch_id=batch_id,
-        run_gh=gh, pace=lambda s: None, log=lambda *a: None,
+        con,
+        results_dir=dirs["results_dir"],
+        batch_id=batch_id,
+        run_gh=gh,
+        pace=lambda s: None,
+        log=lambda *a: None,
     )
     assert summary["counts"]["dry-run"] == 1
     assert len(gh.mutating_calls) == before
@@ -101,11 +125,23 @@ def test_undo_is_idempotent(tmp_path):
     con, dirs, batch_id = _run_batch(
         tmp_path, [_proposal("p1", "add-label", {"label": "regression"})], gh
     )
-    executor.undo(con, results_dir=dirs["results_dir"], batch_id=batch_id,
-                  run_gh=gh, apply=True, pace=lambda s: None, log=lambda *a: None)
+    executor.undo(
+        con,
+        results_dir=dirs["results_dir"],
+        batch_id=batch_id,
+        run_gh=gh,
+        apply=True,
+        pace=lambda s: None,
+        log=lambda *a: None,
+    )
     summary = executor.undo(
-        con, results_dir=dirs["results_dir"], batch_id=batch_id,
-        run_gh=gh, apply=True, pace=lambda s: None, log=lambda *a: None,
+        con,
+        results_dir=dirs["results_dir"],
+        batch_id=batch_id,
+        run_gh=gh,
+        apply=True,
+        pace=lambda s: None,
+        log=lambda *a: None,
     )
     assert summary["counts"]["applied"] == 0
     assert summary["counts"]["skipped"] == 1
@@ -117,8 +153,15 @@ def test_undo_does_not_remove_preexisting_label(tmp_path):
     con, dirs, batch_id = _run_batch(
         tmp_path, [_proposal("p1", "add-label", {"label": "regression"})], gh
     )
-    executor.undo(con, results_dir=dirs["results_dir"], batch_id=batch_id,
-                  run_gh=gh, apply=True, pace=lambda s: None, log=lambda *a: None)
+    executor.undo(
+        con,
+        results_dir=dirs["results_dir"],
+        batch_id=batch_id,
+        run_gh=gh,
+        apply=True,
+        pace=lambda s: None,
+        log=lambda *a: None,
+    )
     assert gh.issues[("o/r", 1)]["labels"] == ["regression"]
 
 
@@ -132,8 +175,15 @@ def test_undo_issue_filter(tmp_path):
         ],
         gh,
     )
-    executor.undo(con, results_dir=dirs["results_dir"], batch_id=batch_id,
-                  run_gh=gh, issue="o/r#1", apply=True,
-                  pace=lambda s: None, log=lambda *a: None)
+    executor.undo(
+        con,
+        results_dir=dirs["results_dir"],
+        batch_id=batch_id,
+        run_gh=gh,
+        issue="o/r#1",
+        apply=True,
+        pace=lambda s: None,
+        log=lambda *a: None,
+    )
     assert gh.issues[("o/r", 1)]["labels"] == []
     assert gh.issues[("o/r", 2)]["labels"] == ["duplicate"]

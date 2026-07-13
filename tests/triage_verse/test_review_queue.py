@@ -359,9 +359,7 @@ def test_stale_result_resurfaces_proposal(tmp_path):
     )
     # Without results_dir: hidden (decided). With: resurfaces, flagged stale.
     assert (
-        review_queue.load_undecided(
-            tmp_path / "proposals", tmp_path / "decisions", con
-        )
+        review_queue.load_undecided(tmp_path / "proposals", tmp_path / "decisions", con)
         == []
     )
     [row] = review_queue.load_undecided(

@@ -111,7 +111,10 @@ def plan_decision(
     if action == "close":
         reason = params.get("reason")
         if reason == "duplicate":
-            return [], "close reason 'duplicate' must arrive as a close-duplicate proposal"
+            return (
+                [],
+                "close reason 'duplicate' must arrive as a close-duplicate proposal",
+            )
         if reason not in CLOSE_REASON_MAP:
             return [], f"unknown close reason: {reason!r}"
         gh_reason, template_name = CLOSE_REASON_MAP[reason]
@@ -169,7 +172,9 @@ def _describe(mutation: dict) -> str:
         return f"comment: {first_line[:60]}…"
     if kind == "close":
         return f"close --reason {mutation['reason']!r}"
-    return f"close as duplicate of {mutation['canonical'][0]}#{mutation['canonical'][1]}"
+    return (
+        f"close as duplicate of {mutation['canonical'][0]}#{mutation['canonical'][1]}"
+    )
 
 
 def _apply_mutation(
@@ -178,18 +183,51 @@ def _apply_mutation(
     """Perform one mutation; returns the created comment id, if any."""
     kind = mutation["kind"]
     if kind == "add-label":
-        run_gh(["issue", "edit", str(number), "--repo", repo,
-                "--add-label", mutation["label"]])
+        run_gh(
+            [
+                "issue",
+                "edit",
+                str(number),
+                "--repo",
+                repo,
+                "--add-label",
+                mutation["label"],
+            ]
+        )
     elif kind == "remove-label":
-        run_gh(["issue", "edit", str(number), "--repo", repo,
-                "--remove-label", mutation["label"]])
+        run_gh(
+            [
+                "issue",
+                "edit",
+                str(number),
+                "--repo",
+                repo,
+                "--remove-label",
+                mutation["label"],
+            ]
+        )
     elif kind == "comment":
-        out = run_gh(["api", f"repos/{repo}/issues/{number}/comments",
-                      "-f", f"body={mutation['body']}"])
+        out = run_gh(
+            [
+                "api",
+                f"repos/{repo}/issues/{number}/comments",
+                "-f",
+                f"body={mutation['body']}",
+            ]
+        )
         return json.loads(out)["id"]
     elif kind == "close":
-        run_gh(["issue", "close", str(number), "--repo", repo,
-                "--reason", mutation["reason"]])
+        run_gh(
+            [
+                "issue",
+                "close",
+                str(number),
+                "--repo",
+                repo,
+                "--reason",
+                mutation["reason"],
+            ]
+        )
     elif kind == "close-duplicate":
         dup_repo, dup_number = mutation["canonical"]
         dup = _fetch_issue(run_gh, dup_repo, dup_number)
@@ -198,8 +236,18 @@ def _apply_mutation(
             "issueId: $issue, stateReason: DUPLICATE, duplicateIssueId: $dup"
             "}) { issue { id } } }"
         )
-        run_gh(["api", "graphql", "-f", f"query={query}",
-                "-f", f"issue={node_id}", "-f", f"dup={dup['node_id']}"])
+        run_gh(
+            [
+                "api",
+                "graphql",
+                "-f",
+                f"query={query}",
+                "-f",
+                f"issue={node_id}",
+                "-f",
+                f"dup={dup['node_id']}",
+            ]
+        )
     return None
 
 
@@ -207,8 +255,11 @@ _MIRROR_STATE_REASON = {"completed": "COMPLETED", "not planned": "NOT_PLANNED"}
 
 
 def _update_mirror(
-    con: sqlite3.Connection, repo: str, number: int,
-    prior_labels: list[str], mutations: list[dict],
+    con: sqlite3.Connection,
+    repo: str,
+    number: int,
+    prior_labels: list[str],
+    mutations: list[dict],
 ) -> None:
     labels = list(prior_labels)
     state: str | None = None
@@ -323,8 +374,11 @@ def execute(
                 first_mutation = False
                 log(f"APPLY {header}: {_describe(m)}")
                 comment_id = _apply_mutation(
-                    run_gh, decision["repo"], decision["issue"],
-                    issue["node_id"], m,
+                    run_gh,
+                    decision["repo"],
+                    decision["issue"],
+                    issue["node_id"],
+                    m,
                 )
                 if comment_id is not None:
                     rec["comment_id"] = comment_id
@@ -335,7 +389,11 @@ def execute(
             continue
         try:
             _update_mirror(
-                con, decision["repo"], decision["issue"], rec["prior"]["labels"], mutations
+                con,
+                decision["repo"],
+                decision["issue"],
+                rec["prior"]["labels"],
+                mutations,
             )
         except Exception as exc:
             log(f"WARN {header}: mirror update failed: {exc}")
@@ -378,8 +436,14 @@ def _apply_reverse(run_gh: RunGh, repo: str, number: int, mutation: dict) -> Non
     if kind in ("add-label", "remove-label"):
         _apply_mutation(run_gh, repo, number, "", mutation)
     elif kind == "delete-comment":
-        run_gh(["api", "-X", "DELETE",
-                f"repos/{repo}/issues/comments/{mutation['comment_id']}"])
+        run_gh(
+            [
+                "api",
+                "-X",
+                "DELETE",
+                f"repos/{repo}/issues/comments/{mutation['comment_id']}",
+            ]
+        )
     elif kind == "reopen":
         run_gh(["issue", "reopen", str(number), "--repo", repo])
 

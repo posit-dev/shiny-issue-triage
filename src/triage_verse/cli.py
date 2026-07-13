@@ -139,9 +139,15 @@ def _cmd_analyze_status(args: argparse.Namespace) -> int:
 
 def _cmd_execute(args: argparse.Namespace) -> int:
     args.db = _env_default(args.db, "TRIAGE_VERSE_DB", DEFAULT_DB)
-    args.decisions_dir = _env_default(args.decisions_dir, "TRIAGE_VERSE_DECISIONS", ".data/decisions")
-    args.proposals_dir = _env_default(args.proposals_dir, "TRIAGE_VERSE_PROPOSALS", DEFAULT_PROPOSALS)
-    args.results_dir = _env_default(args.results_dir, "TRIAGE_VERSE_RESULTS", ".data/results")
+    args.decisions_dir = _env_default(
+        args.decisions_dir, "TRIAGE_VERSE_DECISIONS", ".data/decisions"
+    )
+    args.proposals_dir = _env_default(
+        args.proposals_dir, "TRIAGE_VERSE_PROPOSALS", DEFAULT_PROPOSALS
+    )
+    args.results_dir = _env_default(
+        args.results_dir, "TRIAGE_VERSE_RESULTS", ".data/results"
+    )
     con = _open_db(args.db)
     summary = executor_mod.execute(
         con,
@@ -161,7 +167,9 @@ def _cmd_execute(args: argparse.Namespace) -> int:
 
 def _cmd_undo(args: argparse.Namespace) -> int:
     args.db = _env_default(args.db, "TRIAGE_VERSE_DB", DEFAULT_DB)
-    args.results_dir = _env_default(args.results_dir, "TRIAGE_VERSE_RESULTS", ".data/results")
+    args.results_dir = _env_default(
+        args.results_dir, "TRIAGE_VERSE_RESULTS", ".data/results"
+    )
     con = _open_db(args.db)
     summary = executor_mod.undo(
         con,
@@ -249,7 +257,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_st.add_argument("--db", default=DEFAULT_DB)
     p_st.set_defaults(func=_cmd_analyze_status)
 
-    p_exec = sub.add_parser("execute", help="apply approved decisions (dry-run by default)")
+    p_exec = sub.add_parser(
+        "execute", help="apply approved decisions (dry-run by default)"
+    )
     p_exec.add_argument("--db", default=None)
     p_exec.add_argument("--decisions-dir", default=None)
     p_exec.add_argument("--proposals-dir", default=None)
@@ -258,17 +268,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_exec.add_argument("--templates", default="config/templates")
     p_exec.add_argument("--repo", help="only decisions for this owner/name")
     p_exec.add_argument("--limit", type=int, help="max decisions this run")
-    p_exec.add_argument("--apply", action="store_true",
-                        help="perform mutations (default: dry-run)")
+    p_exec.add_argument(
+        "--apply", action="store_true", help="perform mutations (default: dry-run)"
+    )
     p_exec.set_defaults(func=_cmd_execute)
 
-    p_undo = sub.add_parser("undo", help="reverse an executed batch (dry-run by default)")
+    p_undo = sub.add_parser(
+        "undo", help="reverse an executed batch (dry-run by default)"
+    )
     p_undo.add_argument("--db", default=None)
     p_undo.add_argument("--results-dir", default=None)
     p_undo.add_argument("--batch", required=True, help="batch id to reverse")
     p_undo.add_argument("--issue", help="restrict to one issue, e.g. owner/name#7")
-    p_undo.add_argument("--apply", action="store_true",
-                        help="perform mutations (default: dry-run)")
+    p_undo.add_argument(
+        "--apply", action="store_true", help="perform mutations (default: dry-run)"
+    )
     p_undo.set_defaults(func=_cmd_undo)
 
     return parser
