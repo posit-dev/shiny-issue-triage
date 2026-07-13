@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import os
 import pathlib
 import sys
 
@@ -11,6 +12,8 @@ from . import analytics as analytics_mod
 from . import analyze as analyze_mod
 from . import config, db
 from . import embed as embed_mod
+from . import executor as executor_mod
+from . import gh
 from . import llm
 from . import sync as sync_mod
 from . import snapshot as snapshot_mod
@@ -25,6 +28,10 @@ DEFAULT_PROPOSALS = ".data/proposals"
 def _open_db(path: str) -> "db.sqlite3.Connection":
     pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
     return db.connect(path)
+
+
+def _env_default(value: str | None, env: str, fallback: str) -> str:
+    return value if value is not None else os.environ.get(env, fallback)
 
 
 def _cmd_sync(args: argparse.Namespace) -> int:
@@ -130,6 +137,44 @@ def _cmd_analyze_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_execute(args: argparse.Namespace) -> int:
+    args.db = _env_default(args.db, "TRIAGE_VERSE_DB", DEFAULT_DB)
+    args.decisions_dir = _env_default(args.decisions_dir, "TRIAGE_VERSE_DECISIONS", ".data/decisions")
+    args.proposals_dir = _env_default(args.proposals_dir, "TRIAGE_VERSE_PROPOSALS", DEFAULT_PROPOSALS)
+    args.results_dir = _env_default(args.results_dir, "TRIAGE_VERSE_RESULTS", ".data/results")
+    con = _open_db(args.db)
+    summary = executor_mod.execute(
+        con,
+        decisions_dir=args.decisions_dir,
+        proposals_dir=args.proposals_dir,
+        results_dir=args.results_dir,
+        labels_path=args.labels,
+        templates_dir=args.templates,
+        run_gh=gh.run_gh,
+        apply=args.apply,
+        repo=args.repo,
+        limit=args.limit,
+    )
+    print(f"batch {summary['batch_id']}: {summary['counts']}")
+    return 1 if summary["counts"]["error"] else 0
+
+
+def _cmd_undo(args: argparse.Namespace) -> int:
+    args.db = _env_default(args.db, "TRIAGE_VERSE_DB", DEFAULT_DB)
+    args.results_dir = _env_default(args.results_dir, "TRIAGE_VERSE_RESULTS", ".data/results")
+    con = _open_db(args.db)
+    summary = executor_mod.undo(
+        con,
+        results_dir=args.results_dir,
+        batch_id=args.batch,
+        issue=args.issue,
+        run_gh=gh.run_gh,
+        apply=args.apply,
+    )
+    print(f"batch {summary['batch_id']}: {summary['counts']}")
+    return 1 if summary["counts"]["error"] else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="triage-verse")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -203,6 +248,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_st.add_argument("--db", default=DEFAULT_DB)
     p_st.set_defaults(func=_cmd_analyze_status)
+
+    p_exec = sub.add_parser("execute", help="apply approved decisions (dry-run by default)")
+    p_exec.add_argument("--db", default=None)
+    p_exec.add_argument("--decisions-dir", default=None)
+    p_exec.add_argument("--proposals-dir", default=None)
+    p_exec.add_argument("--results-dir", default=None)
+    p_exec.add_argument("--labels", default=".github/triage/labels.yaml")
+    p_exec.add_argument("--templates", default="config/templates")
+    p_exec.add_argument("--repo", help="only decisions for this owner/name")
+    p_exec.add_argument("--limit", type=int, help="max decisions this run")
+    p_exec.add_argument("--apply", action="store_true",
+                        help="perform mutations (default: dry-run)")
+    p_exec.set_defaults(func=_cmd_execute)
+
+    p_undo = sub.add_parser("undo", help="reverse an executed batch (dry-run by default)")
+    p_undo.add_argument("--db", default=None)
+    p_undo.add_argument("--results-dir", default=None)
+    p_undo.add_argument("--batch", required=True, help="batch id to reverse")
+    p_undo.add_argument("--issue", help="restrict to one issue, e.g. owner/name#7")
+    p_undo.add_argument("--apply", action="store_true",
+                        help="perform mutations (default: dry-run)")
+    p_undo.set_defaults(func=_cmd_undo)
 
     return parser
 
