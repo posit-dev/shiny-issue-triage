@@ -184,6 +184,38 @@ def test_rerun_after_apply_skips_finalized_decisions(tmp_path):
                                  "stale-needs-rereview": 0, "error": 0}
 
 
+def test_records_are_written_incrementally_per_decision(tmp_path, monkeypatch):
+    con, dirs = _setup(
+        tmp_path,
+        [
+            _proposal("p1", "add-label", {"label": "regression"}),
+            _proposal("p2", "add-label", {"label": "duplicate"}, issue=2),
+        ],
+        ["approved", "approved"],
+    )
+    gh = _fake({
+        ("o/r", 1): {"labels": [], "state": "open", "state_reason": None,
+                     "updated_at": UPDATED, "node_id": "N1"},
+        ("o/r", 2): {"labels": [], "state": "open", "state_reason": None,
+                     "updated_at": UPDATED, "node_id": "N2"},
+    })
+    real_append_weekly = jsonl_log.append_weekly
+    calls = []
+
+    def counting_append_weekly(records, results_dir):
+        calls.append(records)
+        return real_append_weekly(records, results_dir)
+
+    monkeypatch.setattr(executor.jsonl_log, "append_weekly", counting_append_weekly)
+    summary = executor.execute(con, run_gh=gh, apply=True, pace=lambda s: None,
+                               log=lambda *a: None, **dirs)
+    assert summary["counts"]["applied"] == 2
+    assert len(calls) == 2
+    assert all(len(c) == 1 for c in calls)
+    results = review_queue.iter_jsonl_records(dirs["results_dir"])
+    assert len(results) == 2
+
+
 def test_repo_filter_and_limit(tmp_path):
     con, dirs = _setup(
         tmp_path,

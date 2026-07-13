@@ -264,7 +264,6 @@ def execute(
 
     batch_id = uuid.uuid4().hex
     counts = {"applied": 0, "dry-run": 0, "stale-needs-rereview": 0, "error": 0}
-    records: list[dict] = []
     first_mutation = True
 
     for decision in picked:
@@ -282,14 +281,14 @@ def execute(
         proposal = proposals_index.get(decision["proposal_id"])
         if proposal is None:
             rec.update(status="error", error="proposal not found")
-            records.append(rec)
+            jsonl_log.append_weekly([rec], results_dir)
             counts["error"] += 1
             continue
         try:
             issue = _fetch_issue(run_gh, decision["repo"], decision["issue"])
         except Exception as exc:  # gh.GhError or JSON decode
             rec.update(status="error", error=f"fetch failed: {exc}")
-            records.append(rec)
+            jsonl_log.append_weekly([rec], results_dir)
             counts["error"] += 1
             continue
         rec["prior"] = _prior(issue)
@@ -299,14 +298,14 @@ def execute(
                 f"STALE {decision['repo']}#{decision['issue']}: updated_at moved "
                 f"{proposal.get('issue_updated_at')} -> {issue['updated_at']}"
             )
-            records.append(rec)
+            jsonl_log.append_weekly([rec], results_dir)
             counts["stale-needs-rereview"] += 1
             continue
         mutations, err = plan_decision(decision, issue, allowed=allowed, tmpl=tmpl)
         if err is not None:
             rec.update(status="error", error=err)
             log(f"ERROR {decision['repo']}#{decision['issue']}: {err}")
-            records.append(rec)
+            jsonl_log.append_weekly([rec], results_dir)
             counts["error"] += 1
             continue
         header = f"{decision['repo']}#{decision['issue']} [{decision['action']}]"
@@ -314,7 +313,7 @@ def execute(
             for m in mutations:
                 log(f"DRY-RUN {header}: {_describe(m)}")
             rec["status"] = "dry-run"
-            records.append(rec)
+            jsonl_log.append_weekly([rec], results_dir)
             counts["dry-run"] += 1
             continue
         try:
@@ -331,18 +330,19 @@ def execute(
                     rec["comment_id"] = comment_id
         except Exception as exc:
             rec.update(status="error", error=str(exc))
-            records.append(rec)
+            jsonl_log.append_weekly([rec], results_dir)
             counts["error"] += 1
             continue
-        _update_mirror(
-            con, decision["repo"], decision["issue"], rec["prior"]["labels"], mutations
-        )
+        try:
+            _update_mirror(
+                con, decision["repo"], decision["issue"], rec["prior"]["labels"], mutations
+            )
+        except Exception as exc:
+            log(f"WARN {header}: mirror update failed: {exc}")
         rec["status"] = "applied"
-        records.append(rec)
+        jsonl_log.append_weekly([rec], results_dir)
         counts["applied"] += 1
 
-    if records:
-        jsonl_log.append_weekly(records, results_dir)
     log(f"batch {batch_id}: {counts}")
     return {"batch_id": batch_id, "counts": counts}
 
@@ -443,7 +443,6 @@ def undo(
 
     undo_batch_id = uuid.uuid4().hex
     counts = {"applied": 0, "dry-run": 0, "error": 0, "skipped": 0}
-    records: list[dict] = []
     first_mutation = True
 
     for rec in reversed(targets):
@@ -467,7 +466,7 @@ def undo(
             for m in mutations:
                 log(f"DRY-RUN {header}: {_describe_reverse(m)}")
             out["status"] = "dry-run"
-            records.append(out)
+            jsonl_log.append_weekly([out], results_dir)
             counts["dry-run"] += 1
             continue
         try:
@@ -479,15 +478,16 @@ def undo(
                 _apply_reverse(run_gh, rec["repo"], rec["issue"], m)
         except Exception as exc:
             out.update(status="error", error=str(exc))
-            records.append(out)
+            jsonl_log.append_weekly([out], results_dir)
             counts["error"] += 1
             continue
-        _undo_mirror(con, rec)
+        try:
+            _undo_mirror(con, rec)
+        except Exception as exc:
+            log(f"WARN {header}: mirror update failed: {exc}")
         out["status"] = "applied"
-        records.append(out)
+        jsonl_log.append_weekly([out], results_dir)
         counts["applied"] += 1
 
-    if records:
-        jsonl_log.append_weekly(records, results_dir)
     log(f"undo batch {undo_batch_id} (undoes {batch_id}): {counts}")
     return {"batch_id": undo_batch_id, "counts": counts}
