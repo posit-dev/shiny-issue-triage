@@ -48,7 +48,11 @@ triage-verse undo --batch <id> [--issue OWNER/NAME#N] [--apply]
    holds the reviewer's edited values; `proposed_params` is the original).
 3. Take the **latest decision per `proposal_id`** (by `decided_at`) — a proposal
    re-reviewed after a stale bounce may have several decisions.
-4. Drop any decision whose `id` already appears as `decision_id` in the results
+4. Join each decision back to its proposal record (by `proposal_id`, from the
+   proposals log under `TRIAGE_VERSE_PROPOSALS`, default `.data/proposals`) —
+   decision records don't carry `issue_updated_at`, the freshness baseline lives
+   on the proposal. A decision whose proposal can't be found is an `error` result.
+5. Drop any decision whose `id` already appears as `decision_id` in the results
    log with a **final** status (`applied`, `stale-needs-rereview`, or `error`).
    `dry-run` records are not final — a dry run never blocks a later `--apply`.
    This makes `execute` idempotent: re-running skips completed work.
@@ -89,7 +93,7 @@ the next pipeline run re-proposing it with a fresh `issue_updated_at`.
 |---|---|---|
 | `add-label` | `gh issue edit --add-label <label>` | `params.label` |
 | `set-priority` | `gh issue edit --add-label <priority label>`, removing any other `Priority: *` label the issue carries | `params.priority`, mapped to a `priority` entry in `.github/triage/labels.yaml` |
-| `close` | post templated comment → `gh issue close --reason {completed\|"not planned"}` | `params.reason` ∈ {`completed`, `not-planned`} |
+| `close` | post templated comment → `gh issue close --reason {completed\|"not planned"}` | `params.reason` is the classifier enum {`fixed`, `answered`, `stale`, `not-planned`, `duplicate`}: `fixed`/`answered` → GitHub reason `completed` + close-completed template; `stale`/`not-planned` → GitHub reason `not planned` + close-not-planned template; `duplicate` → error (duplicates must arrive as `close-duplicate` proposals with a canonical target) |
 | `close-duplicate` | post templated comment linking canonical → close as duplicate via `gh api graphql` `closeIssue(stateReason: DUPLICATE, duplicateIssueId: …)` | `params.canonical` (repo + number); cross-repo pairs fall back to `--reason "not planned"` + the cross-repo template variant, since GitHub's duplicate close is same-repo only |
 | `reopen` | `gh issue reopen` | undo-only; never proposed |
 
