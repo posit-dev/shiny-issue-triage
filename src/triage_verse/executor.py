@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import re
+import sqlite3
+import time
+import uuid
 from datetime import datetime, timezone
+from typing import Any, Callable
 
+from . import jsonl_log, prompts, review_queue
 from . import templates as templates_mod
+
+RunGh = Callable[..., str]
 
 FINAL_STATUSES = frozenset({"applied", "stale-needs-rereview", "error"})
 EXECUTABLE_VERDICTS = frozenset({"approved", "edited"})
@@ -138,3 +146,202 @@ def plan_decision(
         ], None
 
     return [], f"action not allowlisted: {action!r}"
+
+
+def _fetch_issue(run_gh: RunGh, repo: str, number: int) -> dict:
+    return json.loads(run_gh(["api", f"repos/{repo}/issues/{number}"]))
+
+
+def _prior(issue: dict) -> dict:
+    return {
+        "labels": [entry["name"] for entry in issue.get("labels", [])],
+        "state": issue["state"],
+        "state_reason": issue.get("state_reason"),
+    }
+
+
+def _describe(mutation: dict) -> str:
+    kind = mutation["kind"]
+    if kind in ("add-label", "remove-label"):
+        return f"{kind} {mutation['label']!r}"
+    if kind == "comment":
+        first_line = mutation["body"].strip().splitlines()[0]
+        return f"comment: {first_line[:60]}…"
+    if kind == "close":
+        return f"close --reason {mutation['reason']!r}"
+    return f"close as duplicate of {mutation['canonical'][0]}#{mutation['canonical'][1]}"
+
+
+def _apply_mutation(
+    run_gh: RunGh, repo: str, number: int, node_id: str, mutation: dict
+) -> int | None:
+    """Perform one mutation; returns the created comment id, if any."""
+    kind = mutation["kind"]
+    if kind == "add-label":
+        run_gh(["issue", "edit", str(number), "--repo", repo,
+                "--add-label", mutation["label"]])
+    elif kind == "remove-label":
+        run_gh(["issue", "edit", str(number), "--repo", repo,
+                "--remove-label", mutation["label"]])
+    elif kind == "comment":
+        out = run_gh(["api", f"repos/{repo}/issues/{number}/comments",
+                      "-f", f"body={mutation['body']}"])
+        return json.loads(out)["id"]
+    elif kind == "close":
+        run_gh(["issue", "close", str(number), "--repo", repo,
+                "--reason", mutation["reason"]])
+    elif kind == "close-duplicate":
+        dup_repo, dup_number = mutation["canonical"]
+        dup = _fetch_issue(run_gh, dup_repo, dup_number)
+        query = (
+            "mutation($issue: ID!, $dup: ID!) { closeIssue(input: {"
+            "issueId: $issue, stateReason: DUPLICATE, duplicateIssueId: $dup"
+            "}) { issue { id } } }"
+        )
+        run_gh(["api", "graphql", "-f", f"query={query}",
+                "-f", f"issue={node_id}", "-f", f"dup={dup['node_id']}"])
+    return None
+
+
+_MIRROR_STATE_REASON = {"completed": "COMPLETED", "not planned": "NOT_PLANNED"}
+
+
+def _update_mirror(
+    con: sqlite3.Connection, repo: str, number: int,
+    prior_labels: list[str], mutations: list[dict],
+) -> None:
+    labels = list(prior_labels)
+    state: str | None = None
+    state_reason: str | None = None
+    for m in mutations:
+        if m["kind"] == "add-label" and m["label"] not in labels:
+            labels.append(m["label"])
+        elif m["kind"] == "remove-label" and m["label"] in labels:
+            labels.remove(m["label"])
+        elif m["kind"] == "close":
+            state, state_reason = "CLOSED", _MIRROR_STATE_REASON[m["reason"]]
+        elif m["kind"] == "close-duplicate":
+            state, state_reason = "CLOSED", "DUPLICATE"
+    if state is None:
+        con.execute(
+            "UPDATE issues SET labels_json=? WHERE repo=? AND number=?",
+            (json.dumps(labels), repo, number),
+        )
+    else:
+        con.execute(
+            "UPDATE issues SET labels_json=?, state=?, state_reason=?"
+            " WHERE repo=? AND number=?",
+            (json.dumps(labels), state, state_reason, repo, number),
+        )
+    con.commit()
+
+
+def execute(
+    con: sqlite3.Connection,
+    *,
+    decisions_dir: Any,
+    proposals_dir: Any,
+    results_dir: Any,
+    run_gh: RunGh,
+    apply: bool = False,
+    repo: str | None = None,
+    limit: int | None = None,
+    labels_path: str = ".github/triage/labels.yaml",
+    templates_dir: Any = templates_mod.DEFAULT_DIR,
+    pace: Callable[[float], None] = time.sleep,
+    log: Callable[[str], None] = print,
+) -> dict:
+    """Apply approved decisions to GitHub (dry-run unless apply=True)."""
+    tmpl = templates_mod.load(templates_dir)
+    allowed = prompts.allowed_labels(labels_path)
+    proposals_index = index_proposals(review_queue.iter_jsonl_records(proposals_dir))
+    results = review_queue.iter_jsonl_records(results_dir)
+    picked = select_executable(review_queue.iter_jsonl_records(decisions_dir), results)
+    if repo is not None:
+        picked = [d for d in picked if d["repo"] == repo]
+    if limit is not None:
+        picked = picked[:limit]
+
+    batch_id = uuid.uuid4().hex
+    counts = {"applied": 0, "dry-run": 0, "stale-needs-rereview": 0, "error": 0}
+    records: list[dict] = []
+    first_mutation = True
+
+    for decision in picked:
+        rec = {
+            "id": uuid.uuid4().hex,
+            "batch_id": batch_id,
+            "decision_id": decision["id"],
+            "proposal_id": decision["proposal_id"],
+            "repo": decision["repo"],
+            "issue": decision["issue"],
+            "action": decision["action"],
+            "params": decision.get("params") or {},
+            "executed_at": _now(),
+        }
+        proposal = proposals_index.get(decision["proposal_id"])
+        if proposal is None:
+            rec.update(status="error", error="proposal not found")
+            records.append(rec)
+            counts["error"] += 1
+            continue
+        try:
+            issue = _fetch_issue(run_gh, decision["repo"], decision["issue"])
+        except Exception as exc:  # gh.GhError or JSON decode
+            rec.update(status="error", error=f"fetch failed: {exc}")
+            records.append(rec)
+            counts["error"] += 1
+            continue
+        rec["prior"] = _prior(issue)
+        if issue["updated_at"] != proposal.get("issue_updated_at"):
+            rec["status"] = "stale-needs-rereview"
+            log(
+                f"STALE {decision['repo']}#{decision['issue']}: updated_at moved "
+                f"{proposal.get('issue_updated_at')} -> {issue['updated_at']}"
+            )
+            records.append(rec)
+            counts["stale-needs-rereview"] += 1
+            continue
+        mutations, err = plan_decision(decision, issue, allowed=allowed, tmpl=tmpl)
+        if err is not None:
+            rec.update(status="error", error=err)
+            log(f"ERROR {decision['repo']}#{decision['issue']}: {err}")
+            records.append(rec)
+            counts["error"] += 1
+            continue
+        header = f"{decision['repo']}#{decision['issue']} [{decision['action']}]"
+        if not apply:
+            for m in mutations:
+                log(f"DRY-RUN {header}: {_describe(m)}")
+            rec["status"] = "dry-run"
+            records.append(rec)
+            counts["dry-run"] += 1
+            continue
+        try:
+            for m in mutations:
+                if not first_mutation:
+                    pace(1.0)
+                first_mutation = False
+                log(f"APPLY {header}: {_describe(m)}")
+                comment_id = _apply_mutation(
+                    run_gh, decision["repo"], decision["issue"],
+                    issue["node_id"], m,
+                )
+                if comment_id is not None:
+                    rec["comment_id"] = comment_id
+        except Exception as exc:
+            rec.update(status="error", error=str(exc))
+            records.append(rec)
+            counts["error"] += 1
+            continue
+        _update_mirror(
+            con, decision["repo"], decision["issue"], rec["prior"]["labels"], mutations
+        )
+        rec["status"] = "applied"
+        records.append(rec)
+        counts["applied"] += 1
+
+    if records:
+        jsonl_log.append_weekly(records, results_dir)
+    log(f"batch {batch_id}: {counts}")
+    return {"batch_id": batch_id, "counts": counts}
