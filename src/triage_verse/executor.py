@@ -345,3 +345,149 @@ def execute(
         jsonl_log.append_weekly(records, results_dir)
     log(f"batch {batch_id}: {counts}")
     return {"batch_id": batch_id, "counts": counts}
+
+
+def _reverse_mutations(rec: dict) -> list[dict]:
+    """Mutations that reverse one applied result record."""
+    action = rec["action"]
+    params = rec.get("params") or {}
+    prior_labels = rec.get("prior", {}).get("labels", [])
+    muts: list[dict] = []
+    if action == "add-label":
+        label = params.get("label")
+        if label and label not in prior_labels:
+            muts.append({"kind": "remove-label", "label": label})
+    elif action == "set-priority":
+        label = f"Priority: {params.get('priority')}"
+        if label not in prior_labels:
+            muts.append({"kind": "remove-label", "label": label})
+        muts.extend(
+            {"kind": "add-label", "label": name}
+            for name in prior_labels
+            if name.startswith("Priority: ") and name != label
+        )
+    elif action in ("close", "close-duplicate"):
+        if rec.get("comment_id") is not None:
+            muts.append({"kind": "delete-comment", "comment_id": rec["comment_id"]})
+        muts.append({"kind": "reopen"})
+    return muts
+
+
+def _apply_reverse(run_gh: RunGh, repo: str, number: int, mutation: dict) -> None:
+    kind = mutation["kind"]
+    if kind in ("add-label", "remove-label"):
+        _apply_mutation(run_gh, repo, number, "", mutation)
+    elif kind == "delete-comment":
+        run_gh(["api", "-X", "DELETE",
+                f"repos/{repo}/issues/comments/{mutation['comment_id']}"])
+    elif kind == "reopen":
+        run_gh(["issue", "reopen", str(number), "--repo", repo])
+
+
+def _describe_reverse(mutation: dict) -> str:
+    if mutation["kind"] == "delete-comment":
+        return f"delete comment {mutation['comment_id']}"
+    if mutation["kind"] == "reopen":
+        return "reopen"
+    return _describe(mutation)
+
+
+def _undo_mirror(con: sqlite3.Connection, rec: dict) -> None:
+    prior = rec.get("prior")
+    if not prior:
+        return
+    con.execute(
+        "UPDATE issues SET labels_json=?, state=?, state_reason=?"
+        " WHERE repo=? AND number=?",
+        (
+            json.dumps(prior["labels"]),
+            prior["state"].upper(),
+            prior["state_reason"].upper() if prior.get("state_reason") else None,
+            rec["repo"],
+            rec["issue"],
+        ),
+    )
+    con.commit()
+
+
+def undo(
+    con: sqlite3.Connection,
+    *,
+    results_dir: Any,
+    batch_id: str,
+    run_gh: RunGh,
+    issue: str | None = None,
+    apply: bool = False,
+    pace: Callable[[float], None] = time.sleep,
+    log: Callable[[str], None] = print,
+) -> dict:
+    """Reverse an executed batch (dry-run unless apply=True)."""
+    all_results = review_queue.iter_jsonl_records(results_dir)
+    already_undone = {
+        r["undoes_result_id"]
+        for r in all_results
+        if r.get("action") == "undo" and r.get("status") == "applied"
+    }
+    targets = [
+        r
+        for r in all_results
+        if r.get("batch_id") == batch_id
+        and r.get("status") == "applied"
+        and r.get("action") != "undo"
+    ]
+    if issue is not None:
+        ref = parse_issue_ref(issue, default_repo="")
+        if ref is None:
+            raise ValueError(f"cannot parse --issue value: {issue!r}")
+        targets = [r for r in targets if (r["repo"], r["issue"]) == ref]
+
+    undo_batch_id = uuid.uuid4().hex
+    counts = {"applied": 0, "dry-run": 0, "error": 0, "skipped": 0}
+    records: list[dict] = []
+    first_mutation = True
+
+    for rec in reversed(targets):
+        header = f"{rec['repo']}#{rec['issue']} [undo {rec['action']}]"
+        if rec["id"] in already_undone:
+            log(f"SKIP {header}: already undone")
+            counts["skipped"] += 1
+            continue
+        out = {
+            "id": uuid.uuid4().hex,
+            "batch_id": undo_batch_id,
+            "undoes_result_id": rec["id"],
+            "action": "undo",
+            "repo": rec["repo"],
+            "issue": rec["issue"],
+            "params": {"undone_action": rec["action"]},
+            "executed_at": _now(),
+        }
+        mutations = _reverse_mutations(rec)
+        if not apply:
+            for m in mutations:
+                log(f"DRY-RUN {header}: {_describe_reverse(m)}")
+            out["status"] = "dry-run"
+            records.append(out)
+            counts["dry-run"] += 1
+            continue
+        try:
+            for m in mutations:
+                if not first_mutation:
+                    pace(1.0)
+                first_mutation = False
+                log(f"APPLY {header}: {_describe_reverse(m)}")
+                _apply_reverse(run_gh, rec["repo"], rec["issue"], m)
+        except Exception as exc:
+            out.update(status="error", error=str(exc))
+            records.append(out)
+            counts["error"] += 1
+            continue
+        _undo_mirror(con, rec)
+        out["status"] = "applied"
+        records.append(out)
+        counts["applied"] += 1
+
+    if records:
+        jsonl_log.append_weekly(records, results_dir)
+    log(f"undo batch {undo_batch_id} (undoes {batch_id}): {counts}")
+    return {"batch_id": undo_batch_id, "counts": counts}
