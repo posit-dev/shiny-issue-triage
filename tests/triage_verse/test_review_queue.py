@@ -1,6 +1,6 @@
 import json
 
-from triage_verse import db, review_queue
+from triage_verse import db, jsonl_log, review_queue
 
 
 def _write_jsonl(path, records):
@@ -321,6 +321,101 @@ def test_key_actions_cover_documented_bindings():
         "Enter": "open",
         "Escape": "close",
     }
+
+
+def test_stale_result_resurfaces_proposal(tmp_path):
+    con = _mirror(tmp_path)
+    _seed_issue(con, "o/r", 1, "OPEN")
+    proposal = {
+        "id": "p1",
+        "repo": "o/r",
+        "issue": 1,
+        "action": "add-label",
+        "params": {"label": "regression"},
+        "confidence": 0.9,
+    }
+    jsonl_log.append_weekly([proposal], tmp_path / "proposals")
+    jsonl_log.append_weekly(
+        [
+            {
+                "id": "d1",
+                "proposal_id": "p1",
+                "verdict": "approved",
+                "decided_at": "2026-07-12T00:00:00Z",
+            }
+        ],
+        tmp_path / "decisions",
+    )
+    jsonl_log.append_weekly(
+        [
+            {
+                "id": "r1",
+                "proposal_id": "p1",
+                "status": "stale-needs-rereview",
+                "executed_at": "2026-07-13T00:00:00Z",
+            }
+        ],
+        tmp_path / "results",
+    )
+    # Without results_dir: hidden (decided). With: resurfaces, flagged stale.
+    assert (
+        review_queue.load_undecided(
+            tmp_path / "proposals", tmp_path / "decisions", con
+        )
+        == []
+    )
+    [row] = review_queue.load_undecided(
+        tmp_path / "proposals",
+        tmp_path / "decisions",
+        con,
+        results_dir=tmp_path / "results",
+    )
+    assert row["id"] == "p1" and row["stale"] is True
+
+
+def test_fresh_decision_after_stale_result_hides_again(tmp_path):
+    con = _mirror(tmp_path)
+    _seed_issue(con, "o/r", 1, "OPEN")
+    proposal = {
+        "id": "p1",
+        "repo": "o/r",
+        "issue": 1,
+        "action": "add-label",
+        "params": {"label": "regression"},
+        "confidence": 0.9,
+    }
+    jsonl_log.append_weekly([proposal], tmp_path / "proposals")
+    jsonl_log.append_weekly(
+        [
+            {
+                "id": "r1",
+                "proposal_id": "p1",
+                "status": "stale-needs-rereview",
+                "executed_at": "2026-07-13T00:00:00Z",
+            }
+        ],
+        tmp_path / "results",
+    )
+    jsonl_log.append_weekly(
+        [
+            {
+                "id": "d2",
+                "proposal_id": "p1",
+                "verdict": "rejected",
+                "decided_at": "2026-07-14T00:00:00Z",
+            }
+        ],
+        tmp_path / "decisions",
+    )
+    assert (
+        review_queue.load_undecided(
+            tmp_path / "proposals",
+            tmp_path / "decisions",
+            con,
+            results_dir=tmp_path / "results",
+        )
+        == []
+    )
 
 
 def test_clamp_index():

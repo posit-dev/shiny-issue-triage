@@ -69,14 +69,30 @@ def load_undecided(
     proposals_dir: str | pathlib.Path,
     decisions_dir: str | pathlib.Path,
     con: sqlite3.Connection,
+    results_dir: str | pathlib.Path | None = None,
 ) -> list[dict]:
+    stale_at: dict[str, str] = {}
+    if results_dir is not None:
+        for r in iter_jsonl_records(results_dir):
+            if r.get("status") == "stale-needs-rereview" and r.get("proposal_id"):
+                t = r.get("executed_at", "")
+                if t > stale_at.get(r["proposal_id"], ""):
+                    stale_at[r["proposal_id"]] = t
+    latest_decided: dict[str, str] = {}
+    for r in iter_jsonl_records(decisions_dir):
+        if "proposal_id" not in r:
+            continue
+        t = r.get("decided_at", "")
+        if t >= latest_decided.get(r["proposal_id"], ""):
+            latest_decided[r["proposal_id"]] = t
     decided_ids = {
-        r["proposal_id"]
-        for r in iter_jsonl_records(decisions_dir)
-        if "proposal_id" in r
+        pid
+        for pid, t in latest_decided.items()
+        # A newer stale bounce voids the decision; the proposal resurfaces.
+        if stale_at.get(pid, "") <= t
     }
     proposals = [
-        r
+        {**r, "stale": True} if r.get("id") in stale_at else r
         for r in iter_jsonl_records(proposals_dir)
         if r.get("id") not in decided_ids
         and r.get("action") in SUPPORTED_ACTIONS

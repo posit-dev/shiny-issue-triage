@@ -18,6 +18,7 @@ from triage_verse import analytics, dashboard, db, decisions, drawer, review_que
 DB_PATH = os.environ.get("TRIAGE_VERSE_DB", ".data/mirror.sqlite")
 PROPOSALS_DIR = os.environ.get("TRIAGE_VERSE_PROPOSALS", ".data/proposals")
 DECISIONS_DIR = os.environ.get("TRIAGE_VERSE_DECISIONS", ".data/decisions")
+RESULTS_DIR = os.environ.get("TRIAGE_VERSE_RESULTS", ".data/results")
 
 pathlib.Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
 _con = db.connect(DB_PATH)
@@ -89,6 +90,19 @@ def row_ui(proposal: dict, snippet: str):
                 ),
             ),
         )
+    if proposal.get("stale"):
+        header.insert(
+            0,
+            ui.span(
+                "stale",
+                style=(
+                    "background-color: #ef6c00; color: white; border-radius: 999px; "
+                    "padding: 0 0.5rem; margin-right: 0.5rem; font-size: 0.8rem;"
+                ),
+                title="Issue changed on GitHub after this was proposed; re-review.",
+            ),
+        )
+    if high_stakes:
         buttons = [
             ui.input_action_button(
                 "open_evidence",
@@ -397,7 +411,9 @@ app_ui = ui.page_navbar(
 
 def server(input: Inputs, output: Outputs, session: Session):
     queue = reactive.value(
-        review_queue.load_undecided(PROPOSALS_DIR, DECISIONS_DIR, _con)
+        review_queue.load_undecided(
+            PROPOSALS_DIR, DECISIONS_DIR, _con, results_dir=RESULTS_DIR
+        )
     )
     drawer_state = reactive.value[dict | None](None)
     selected = reactive.value[int | None](None)
@@ -405,7 +421,11 @@ def server(input: Inputs, output: Outputs, session: Session):
     wired: set[str] = set()
 
     def refresh() -> None:
-        queue.set(review_queue.load_undecided(PROPOSALS_DIR, DECISIONS_DIR, _con))
+        queue.set(
+            review_queue.load_undecided(
+                PROPOSALS_DIR, DECISIONS_DIR, _con, results_dir=RESULTS_DIR
+            )
+        )
 
     def on_decide(proposal: dict, verdict: str, params: dict | None = None) -> None:
         decisions.write(
