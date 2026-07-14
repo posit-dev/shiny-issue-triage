@@ -242,6 +242,19 @@ def _cmd_tier1(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_tier2(args: argparse.Namespace) -> int:
+    from . import executor, tier2
+    ref = executor.parse_issue_ref(args.issue, default_repo="")
+    if ref is None:
+        print(f"error: cannot parse issue ref {args.issue!r}")
+        return 1
+    tier2.request_fix(ref[0], ref[1], run_gh=gh.run_gh)
+    print(f"labeled {ref[0]}#{ref[1]} with {tier2.LABEL}")
+    print(f"kick off the fix: gh workflow run tier2-fix.yml -f issue={args.issue}"
+          f" -f model={args.model}")
+    return 0
+
+
 def _cmd_steady_state(args: argparse.Namespace) -> int:
     from . import state, steady_state
 
@@ -406,6 +419,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_t1.add_argument("--repo")
     p_t1.add_argument("--proposals-dir", default=DEFAULT_PROPOSALS)
     p_t1.set_defaults(func=_cmd_tier1)
+
+    p_t2 = sub.add_parser("tier2", help="label an issue for AI draft-PR fix")
+    p_t2.add_argument("issue", help="owner/repo#N")
+    p_t2.add_argument("--model", choices=["sonnet", "opus"], default="sonnet")
+    p_t2.set_defaults(func=_cmd_tier2)
 
     p_ss = sub.add_parser("steady-state", help="run full steady-state loop")
     p_ss.add_argument("--db", default=os.environ.get("TRIAGE_VERSE_DB", DEFAULT_DB))
