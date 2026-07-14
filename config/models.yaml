@@ -27,3 +27,11 @@ spend:
     # anthropic_batch; see issue #18). Not load-bearing for backend: claude_cli,
     # which meters from each call's reported total_cost_usd instead.
     claude-sonnet-5: { input: 1.50, cached: 0.15, output: 7.50 }
+tiers:
+  tier1_max_per_day: 25
+  tier2_max_per_week: 10
+autonomy:
+  min_decisions: 200
+  min_precision: 0.98
+  confidence_floor: 0.9
+  audit_rate: 0.10

@@ -41,6 +41,20 @@ class StageConfig:
 
 
 @dataclass(frozen=True)
+class TiersConfig:
+    tier1_max_per_day: int = 25
+    tier2_max_per_week: int = 10
+
+
+@dataclass(frozen=True)
+class AutonomyConfig:
+    min_decisions: int = 200
+    min_precision: float = 0.98
+    confidence_floor: float = 0.9
+    audit_rate: float = 0.10
+
+
+@dataclass(frozen=True)
 class ModelsConfig:
     embed_model: str
     embed_dim: int
@@ -56,6 +70,8 @@ class ModelsConfig:
     pricing: dict[str, dict[str, float]]
     backend: str = "claude_cli"
     workers: int = 1
+    tiers: TiersConfig = TiersConfig()
+    autonomy: AutonomyConfig = AutonomyConfig()
 
 
 def _stage(d: dict[str, Any]) -> StageConfig:
@@ -69,6 +85,8 @@ def _stage(d: dict[str, Any]) -> StageConfig:
 def load_models_config(path: str | pathlib.Path) -> ModelsConfig:
     data = yaml.safe_load(pathlib.Path(path).read_text(encoding="utf-8")) or {}
     emb, st, b, sp = data["embedding"], data["stages"], data["batch"], data["spend"]
+    t = data.get("tiers") or {}
+    a = data.get("autonomy") or {}
     return ModelsConfig(
         embed_model=emb["model"],
         embed_dim=emb["dim"],
@@ -84,4 +102,6 @@ def load_models_config(path: str | pathlib.Path) -> ModelsConfig:
         pricing=sp["pricing"],
         backend=data.get("backend", "claude_cli"),
         workers=b.get("workers", 1),
+        tiers=TiersConfig(**t),
+        autonomy=AutonomyConfig(**a),
     )
