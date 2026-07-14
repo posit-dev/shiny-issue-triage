@@ -32,3 +32,22 @@ def test_steady_state_has_no_issue_write_permission():
     perms = doc.get("permissions", {})
     assert perms.get("issues", "none") != "write"
     assert perms.get("pull-requests", "none") != "write"
+
+
+def test_tier2_fix_is_dispatch_only_with_issue_input():
+    doc, text = _load("tier2-fix.yml")
+    triggers = doc.get(True, doc.get("on"))
+    assert "workflow_dispatch" in triggers
+    inputs = triggers["workflow_dispatch"]["inputs"]
+    assert "issue" in inputs and inputs["issue"]["required"] is True
+    assert "model" in inputs
+    active_cron = [ln for ln in text.splitlines()
+                   if "cron:" in ln and not ln.strip().startswith("#")]
+    assert active_cron == []
+
+
+def test_tier2_fix_guards_label_and_weekly_cap():
+    _, text = _load("tier2-fix.yml")
+    assert "ai-triage:fix-requested" in text  # label guard present
+    assert "gh run list" in text  # weekly-cap guard present
+    assert "--draft" in text  # PR opened as draft

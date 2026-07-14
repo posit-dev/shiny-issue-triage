@@ -1,0 +1,61 @@
+name: Tier 2 draft-PR fix
+
+# DORMANT: manual dispatch only. Never auto-merges; always opens a DRAFT PR.
+on:
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: "Target issue as owner/name#N"
+        required: true
+      model:
+        description: "Claude model"
+        required: false
+        default: sonnet
+        type: choice
+        options: [sonnet, opus]
+
+permissions:
+  contents: read
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Guard - label present and issue open
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo="${{ github.event.inputs.issue }}"; repo="${repo%%#*}"
+          num="${{ github.event.inputs.issue }}"; num="${num##*#}"
+          state=$(gh issue view "$num" --repo "$repo" --json state,labels \
+            --jq '.state + " " + ([.labels[].name] | join(","))')
+          echo "$state" | grep -q "ai-triage:fix-requested" \
+            || { echo "issue lacks ai-triage:fix-requested label"; exit 1; }
+          echo "$state" | grep -qi "^OPEN" || { echo "issue not open"; exit 1; }
+      - name: Guard - weekly cap
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          since=$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)
+          count=$(gh run list --workflow tier2-fix.yml --status success \
+            --created ">=$since" --json databaseId --jq 'length')
+          if [ "$count" -ge 10 ]; then echo "weekly Tier 2 cap reached"; exit 1; fi
+      - name: Mint installation token
+        run: node .github/triage/scripts/create-github-app-token-map.mjs
+        env:
+          APP_ID: ${{ secrets.TRIAGE_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.TRIAGE_APP_PRIVATE_KEY }}
+      - name: Install Claude CLI
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Attempt fix and open draft PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          echo "Fix session runs here; opens a DRAFT PR referencing the issue."
+          echo "gh pr create --draft --title ... --body ... referencing the issue"
+      - name: Summary
+        run: echo "Tier 2 fix attempt for ${{ github.event.inputs.issue }}" >> "$GITHUB_STEP_SUMMARY"
