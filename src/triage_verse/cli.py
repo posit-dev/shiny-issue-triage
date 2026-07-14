@@ -231,6 +231,17 @@ def _cmd_undo(args: argparse.Namespace) -> int:
     return 1 if summary["counts"]["error"] else 0
 
 
+def _cmd_tier1(args: argparse.Namespace) -> int:
+    con = _open_db(args.db)
+    repos = [args.repo] if args.repo else [r.full for r in config.load_repos(args.config)]
+    cfg = config.load_models_config(args.models_config)
+    from . import tier1
+    res = tier1.run(con, repos, cfg=cfg, proposals_dir=args.proposals_dir, run_gh=gh.run_gh)
+    print(f"tier1: {res['sessions']} sessions, {res['proposals']} close proposals"
+          f"{' (halted on budget)' if res['halted_on_budget'] else ''}")
+    return 0
+
+
 def _cmd_steady_state(args: argparse.Namespace) -> int:
     from . import state, steady_state
 
@@ -387,6 +398,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_push.add_argument("--db", default=DEFAULT_DB)
     p_push.add_argument("--config", default=DEFAULT_CONFIG)
     p_push.set_defaults(func=_cmd_state_push)
+
+    p_t1 = sub.add_parser("tier1", help="run tier-1 'already fixed?' sessions")
+    p_t1.add_argument("--db", default=DEFAULT_DB)
+    p_t1.add_argument("--config", default=DEFAULT_CONFIG)
+    p_t1.add_argument("--models-config", default=DEFAULT_MODELS)
+    p_t1.add_argument("--repo")
+    p_t1.add_argument("--proposals-dir", default=DEFAULT_PROPOSALS)
+    p_t1.set_defaults(func=_cmd_tier1)
 
     p_ss = sub.add_parser("steady-state", help="run full steady-state loop")
     p_ss.add_argument("--db", default=os.environ.get("TRIAGE_VERSE_DB", DEFAULT_DB))
