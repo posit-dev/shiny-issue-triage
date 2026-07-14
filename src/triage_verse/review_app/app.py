@@ -13,7 +13,7 @@ from typing import Callable
 
 from shiny import App, Inputs, Outputs, Session, module, reactive, render, ui
 
-from triage_verse import analytics, dashboard, db, decisions, drawer, review_queue
+from triage_verse import analytics, dashboard, db, decisions, drawer, gh, review_queue, tier2
 
 DB_PATH = os.environ.get("TRIAGE_VERSE_DB", ".data/mirror.sqlite")
 PROPOSALS_DIR = os.environ.get("TRIAGE_VERSE_PROPOSALS", ".data/proposals")
@@ -206,6 +206,11 @@ _repo_choices = ["All repos"] + [
     )
 ]
 
+def app_tier2_label(repo: str, number: int, *, run_gh=gh.run_gh) -> None:
+    """Apply the Tier-2 fix-requested label to an issue (used by the drawer button)."""
+    tier2.request_fix(repo, number, run_gh=run_gh)
+
+
 dashboard_panel = ui.nav_panel(
     "Dashboard",
     ui.layout_columns(
@@ -326,6 +331,11 @@ def _drawer_proposal(proposal: dict) -> list:
             ),
             ui.input_action_button(
                 "drawer_skip", "Skip", style="background-color: #757575; color: white;"
+            ),
+            ui.input_action_button(
+                "request_ai_fix",
+                "Request AI fix",
+                style="background-color: #1565c0; color: white;",
             ),
             style="display: flex; gap: 0.5rem; margin-bottom: 0.75rem;",
         ),
@@ -586,6 +596,17 @@ def server(input: Inputs, output: Outputs, session: Session):
     @reactive.event(input.drawer_skip)
     def _drawer_skip():
         _decide_from_drawer("skipped")
+
+    @reactive.effect
+    @reactive.event(input.request_ai_fix)
+    def _request_ai_fix():
+        state = drawer_state.get()
+        if state is None:
+            return
+        repo = state["repo"]
+        number = state["number"]
+        app_tier2_label(repo, number)
+        ui.notification_show(f"Requested AI fix for {repo}#{number}")
 
     @reactive.effect
     @reactive.event(input.approve_visible)
