@@ -5,7 +5,9 @@ from __future__ import annotations
 from typing import Callable
 
 
-def run(stages: list[tuple[str, Callable[[], None]]], *, log: Callable[[str], None] = print) -> dict:
+def run(
+    stages: list[tuple[str, Callable[[], None]]], *, log: Callable[[str], None] = print
+) -> dict:
     completed: list[str] = []
     for name, fn in stages:
         log(f"stage: {name} - starting")

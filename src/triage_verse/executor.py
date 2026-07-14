@@ -89,6 +89,7 @@ def load_autonomy(path) -> dict:
     if not p.exists():
         return {}
     import yaml
+
     doc = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
     return doc.get("promoted") or {}
 
@@ -345,15 +346,23 @@ def execute(
     if auto and apply:
         promoted = load_autonomy(autonomy_path)
         all_props = review_queue.iter_jsonl_records(proposals_dir)
-        decided = {d.get("proposal_id") for d in review_queue.iter_jsonl_records(decisions_dir)}
+        decided = {
+            d.get("proposal_id") for d in review_queue.iter_jsonl_records(decisions_dir)
+        }
         auto_props = select_auto(all_props, decided, promoted, audit_rate=audit_rate)
         synthetic = []
         for p in auto_props:
             rec = {
-                "id": uuid.uuid4().hex, "proposal_id": p["id"], "repo": p["repo"],
-                "issue": p["issue"], "action": p["action"], "params": p["params"],
-                "verdict": "auto-approved", "decided_by": "autonomy",
-                "confidence": p.get("confidence"), "audit": p["audit"],
+                "id": uuid.uuid4().hex,
+                "proposal_id": p["id"],
+                "repo": p["repo"],
+                "issue": p["issue"],
+                "action": p["action"],
+                "params": p["params"],
+                "verdict": "auto-approved",
+                "decided_by": "autonomy",
+                "confidence": p.get("confidence"),
+                "audit": p["audit"],
                 "decided_at": _now(),
             }
             synthetic.append(rec)

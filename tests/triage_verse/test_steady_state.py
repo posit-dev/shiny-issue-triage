@@ -32,6 +32,7 @@ def test_stops_at_failing_stage_but_keeps_completed():
 
 def test_steady_state_cli_dry_run(monkeypatch, capsys, tmp_path):
     from triage_verse import cli
+
     monkeypatch.setenv("TRIAGE_VERSE_DB", str(tmp_path / "m.sqlite"))
     rc = cli.main(["steady-state", "--dry-run", "--config", "config/repos.yaml"])
     out = capsys.readouterr().out

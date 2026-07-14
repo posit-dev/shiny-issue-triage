@@ -6,14 +6,25 @@ import yaml
 
 from triage_verse import tier2
 
-LABELS = pathlib.Path(__file__).resolve().parents[2] / ".github" / "triage" / "labels.yaml"
+LABELS = (
+    pathlib.Path(__file__).resolve().parents[2] / ".github" / "triage" / "labels.yaml"
+)
 
 
 def test_request_fix_adds_label_via_gh():
     calls = []
     tier2.request_fix("o/r", 7, run_gh=lambda args, **k: calls.append(args) or "")
-    assert calls == [["issue", "edit", "7", "--repo", "o/r",
-                      "--add-label", "ai-triage:fix-requested"]]
+    assert calls == [
+        [
+            "issue",
+            "edit",
+            "7",
+            "--repo",
+            "o/r",
+            "--add-label",
+            "ai-triage:fix-requested",
+        ]
+    ]
 
 
 def test_marker_label_not_in_allowed_safe_output():

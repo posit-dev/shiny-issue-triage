@@ -3,8 +3,9 @@
 from triage_verse import autonomy, config
 
 
-CFG = config.AutonomyConfig(min_decisions=4, min_precision=0.75,
-                            confidence_floor=0.9, audit_rate=0.10)
+CFG = config.AutonomyConfig(
+    min_decisions=4, min_precision=0.75, confidence_floor=0.9, audit_rate=0.10
+)
 
 
 def _d(action, verdict):
@@ -12,8 +13,12 @@ def _d(action, verdict):
 
 
 def test_category_precision_counts_success_and_failure():
-    decisions = [_d("add-label", "approved"), _d("add-label", "approved"),
-                 _d("add-label", "rejected"), _d("add-label", "skipped")]
+    decisions = [
+        _d("add-label", "approved"),
+        _d("add-label", "approved"),
+        _d("add-label", "rejected"),
+        _d("add-label", "skipped"),
+    ]
     prec = autonomy.category_precision(decisions)
     assert prec["add-label"]["reviewed"] == 3  # skipped excluded
     assert abs(prec["add-label"]["precision"] - 2 / 3) < 1e-9
@@ -49,5 +54,8 @@ def test_render_config_lists_promoted_only():
     good = [_d("add-label", "approved")] * 4
     ev = autonomy.evaluate(good, [], CFG)
     doc = autonomy.render_config(ev, CFG, today="2026-08-01")
-    assert doc == {"promoted": {"add-label": {"promoted_at": "2026-08-01",
-                                              "confidence_floor": 0.9}}}
+    assert doc == {
+        "promoted": {
+            "add-label": {"promoted_at": "2026-08-01", "confidence_floor": 0.9}
+        }
+    }

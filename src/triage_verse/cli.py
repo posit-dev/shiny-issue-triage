@@ -174,9 +174,14 @@ def _cmd_execute(args: argparse.Namespace) -> int:
 
 def _run_git(args, *, cwd=None):
     import subprocess
+
     return subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True,
-        encoding="utf-8", check=True,
+        ["git", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
     ).stdout
 
 
@@ -189,29 +194,41 @@ def _ensure_state_clone(work_dir: str, branch: str) -> None:
 
 def _state_now() -> str:
     from datetime import datetime, timezone
+
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _cmd_state_pull(args: argparse.Namespace) -> int:
     from . import state
+
     work = os.environ.get("TRIAGE_VERSE_STATE_WORKDIR", ".data/triage-state")
     _ensure_state_clone(work, args.branch)
-    res = state.pull(data_dir=args.data_dir, work_dir=work, run_git=_run_git, branch=args.branch)
+    res = state.pull(
+        data_dir=args.data_dir, work_dir=work, run_git=_run_git, branch=args.branch
+    )
     print(f"pulled: {res['files_updated']} files updated")
     return 0
 
 
 def _cmd_state_push(args: argparse.Namespace) -> int:
     from . import state
+
     con = _open_db(args.db)
     repos = [r.full for r in config.load_repos(args.config)]
     work = os.environ.get("TRIAGE_VERSE_STATE_WORKDIR", ".data/triage-state")
     _ensure_state_clone(work, args.branch)
     res = state.push(
-        con, repos, data_dir=args.data_dir, work_dir=work, run_git=_run_git,
-        branch=args.branch, now=_state_now(),
+        con,
+        repos,
+        data_dir=args.data_dir,
+        work_dir=work,
+        run_git=_run_git,
+        branch=args.branch,
+        now=_state_now(),
     )
-    print(f"push: {'committed' if res['pushed'] else 'no changes'} ({res['records']} records)")
+    print(
+        f"push: {'committed' if res['pushed'] else 'no changes'} ({res['records']} records)"
+    )
     return 0
 
 
@@ -235,44 +252,59 @@ def _cmd_undo(args: argparse.Namespace) -> int:
 
 def _cmd_tier1(args: argparse.Namespace) -> int:
     con = _open_db(args.db)
-    repos = [args.repo] if args.repo else [r.full for r in config.load_repos(args.config)]
+    repos = (
+        [args.repo] if args.repo else [r.full for r in config.load_repos(args.config)]
+    )
     cfg = config.load_models_config(args.models_config)
     from . import tier1
-    res = tier1.run(con, repos, cfg=cfg, proposals_dir=args.proposals_dir, run_gh=gh.run_gh)
-    print(f"tier1: {res['sessions']} sessions, {res['proposals']} close proposals"
-          f"{' (halted on budget)' if res['halted_on_budget'] else ''}")
+
+    res = tier1.run(
+        con, repos, cfg=cfg, proposals_dir=args.proposals_dir, run_gh=gh.run_gh
+    )
+    print(
+        f"tier1: {res['sessions']} sessions, {res['proposals']} close proposals"
+        f"{' (halted on budget)' if res['halted_on_budget'] else ''}"
+    )
     return 0
 
 
 def _cmd_tier2(args: argparse.Namespace) -> int:
     from . import executor, tier2
+
     ref = executor.parse_issue_ref(args.issue, default_repo="")
     if ref is None:
         print(f"error: cannot parse issue ref {args.issue!r}")
         return 1
     tier2.request_fix(ref[0], ref[1], run_gh=gh.run_gh)
     print(f"labeled {ref[0]}#{ref[1]} with {tier2.LABEL}")
-    print(f"kick off the fix: gh workflow run tier2-fix.yml -f issue={args.issue}"
-          f" -f model={args.model}")
+    print(
+        f"kick off the fix: gh workflow run tier2-fix.yml -f issue={args.issue}"
+        f" -f model={args.model}"
+    )
     return 0
 
 
 def _cmd_autonomy_status(args: argparse.Namespace) -> int:
     from . import autonomy, review_queue
     import yaml
+
     cfg = config.load_models_config(args.models_config).autonomy
     decisions = review_queue.iter_jsonl_records(args.decisions_dir)
     results = review_queue.iter_jsonl_records(args.results_dir)
     ev = autonomy.evaluate(decisions, results, cfg)
     for action, e in sorted(ev.items()):
         flag = "PROMOTE" if e["promote"] else "hold"
-        print(f"{action}: reviewed={e['reviewed']} precision={e['precision']:.3f}"
-              f" audit_fail={e['audit_failures']} -> {flag}")
+        print(
+            f"{action}: reviewed={e['reviewed']} precision={e['precision']:.3f}"
+            f" audit_fail={e['audit_failures']} -> {flag}"
+        )
     if not ev:
         print("no eligible categories with reviewed decisions yet")
     if args.write:
         doc = autonomy.render_config(ev, cfg, today=_state_now()[:10])
-        pathlib.Path(args.out).write_text(yaml.safe_dump(doc, sort_keys=True), encoding="utf-8")
+        pathlib.Path(args.out).write_text(
+            yaml.safe_dump(doc, sort_keys=True), encoding="utf-8"
+        )
         print(f"wrote {args.out}")
     return 0
 
@@ -286,7 +318,9 @@ def _cmd_steady_state(args: argparse.Namespace) -> int:
 
     def _pull():
         _ensure_state_clone(work, args.branch)
-        state.pull(data_dir=args.data_dir, work_dir=work, run_git=_run_git, branch=args.branch)
+        state.pull(
+            data_dir=args.data_dir, work_dir=work, run_git=_run_git, branch=args.branch
+        )
 
     def _sync():
         sync_mod.sync_all(con, repos, full=False, log=print)
@@ -297,18 +331,38 @@ def _cmd_steady_state(args: argparse.Namespace) -> int:
     def _tier1():
         if not args.no_tier1:
             from . import tier1
-            tier1.run(con, repos, cfg=config.load_models_config(args.models_config),
-                      proposals_dir=args.proposals_dir, run_gh=gh.run_gh, log=print)
+
+            tier1.run(
+                con,
+                repos,
+                cfg=config.load_models_config(args.models_config),
+                proposals_dir=args.proposals_dir,
+                run_gh=gh.run_gh,
+                log=print,
+            )
 
     def _push():
-        state.push(con, repos, data_dir=args.data_dir, work_dir=work, run_git=_run_git,
-                   branch=args.branch, now=_state_now())
+        state.push(
+            con,
+            repos,
+            data_dir=args.data_dir,
+            work_dir=work,
+            run_git=_run_git,
+            branch=args.branch,
+            now=_state_now(),
+        )
 
     def _snapshot():
         snapshot_mod.publish(args.db, dated=False)
 
-    stages = [("state-pull", _pull), ("sync", _sync), ("embed-analyze", _analyze),
-              ("tier1", _tier1), ("state-push", _push), ("snapshot", _snapshot)]
+    stages = [
+        ("state-pull", _pull),
+        ("sync", _sync),
+        ("embed-analyze", _analyze),
+        ("tier1", _tier1),
+        ("state-push", _push),
+        ("snapshot", _snapshot),
+    ]
     if args.dry_run:
         for name, _ in stages:
             print(f"would run: {name}")
@@ -409,7 +463,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--auto", action="store_true", help="auto-approve promoted proposals"
     )
     p_exec.add_argument(
-        "--autonomy", default="config/autonomy.yaml",
+        "--autonomy",
+        default="config/autonomy.yaml",
         help="path to autonomy config (default: config/autonomy.yaml)",
     )
     p_exec.set_defaults(func=_cmd_execute)
@@ -462,18 +517,26 @@ def build_parser() -> argparse.ArgumentParser:
     p_ss.add_argument("--data-dir", default=".data")
     p_ss.add_argument("--branch", default="triage-state")
     p_ss.add_argument("--no-tier1", action="store_true", help="skip tier-1 stage")
-    p_ss.add_argument("--dry-run", action="store_true", help="list stages without running")
-    p_ss.set_defaults(func=_cmd_steady_state, repo=None, limit=None, full=False, wait=True)
+    p_ss.add_argument(
+        "--dry-run", action="store_true", help="list stages without running"
+    )
+    p_ss.set_defaults(
+        func=_cmd_steady_state, repo=None, limit=None, full=False, wait=True
+    )
 
     p_auto = sub.add_parser("autonomy", help="graduated autonomy tools")
     auto_sub = p_auto.add_subparsers(dest="autonomy_command", required=True)
 
-    p_auto_st = auto_sub.add_parser("status", help="show per-category precision and promotion")
+    p_auto_st = auto_sub.add_parser(
+        "status", help="show per-category precision and promotion"
+    )
     p_auto_st.add_argument("--decisions-dir", default=".data/decisions")
     p_auto_st.add_argument("--results-dir", default=".data/results")
     p_auto_st.add_argument("--models-config", default=DEFAULT_MODELS)
     p_auto_st.add_argument("--out", default="config/autonomy.yaml")
-    p_auto_st.add_argument("--write", action="store_true", help="write config/autonomy.yaml")
+    p_auto_st.add_argument(
+        "--write", action="store_true", help="write config/autonomy.yaml"
+    )
     p_auto_st.set_defaults(func=_cmd_autonomy_status)
 
     return parser

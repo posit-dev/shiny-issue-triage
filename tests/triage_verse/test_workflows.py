@@ -21,7 +21,8 @@ def test_steady_state_is_dormant_dispatch_only():
     # No active schedule: any cron line must be commented out.
     assert "schedule:" not in triggers if isinstance(triggers, dict) else True
     active_cron = [
-        ln for ln in text.splitlines()
+        ln
+        for ln in text.splitlines()
         if "cron:" in ln and not ln.strip().startswith("#")
     ]
     assert active_cron == []
@@ -41,8 +42,11 @@ def test_tier2_fix_is_dispatch_only_with_issue_input():
     inputs = triggers["workflow_dispatch"]["inputs"]
     assert "issue" in inputs and inputs["issue"]["required"] is True
     assert "model" in inputs
-    active_cron = [ln for ln in text.splitlines()
-                   if "cron:" in ln and not ln.strip().startswith("#")]
+    active_cron = [
+        ln
+        for ln in text.splitlines()
+        if "cron:" in ln and not ln.strip().startswith("#")
+    ]
     assert active_cron == []
 
 
