@@ -255,6 +255,26 @@ def _cmd_tier2(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_autonomy_status(args: argparse.Namespace) -> int:
+    from . import autonomy, review_queue
+    import yaml
+    cfg = config.load_models_config(args.models_config).autonomy
+    decisions = review_queue.iter_jsonl_records(args.decisions_dir)
+    results = review_queue.iter_jsonl_records(args.results_dir)
+    ev = autonomy.evaluate(decisions, results, cfg)
+    for action, e in sorted(ev.items()):
+        flag = "PROMOTE" if e["promote"] else "hold"
+        print(f"{action}: reviewed={e['reviewed']} precision={e['precision']:.3f}"
+              f" audit_fail={e['audit_failures']} -> {flag}")
+    if not ev:
+        print("no eligible categories with reviewed decisions yet")
+    if args.write:
+        doc = autonomy.render_config(ev, cfg, today=_state_now()[:10])
+        pathlib.Path(args.out).write_text(yaml.safe_dump(doc, sort_keys=True), encoding="utf-8")
+        print(f"wrote {args.out}")
+    return 0
+
+
 def _cmd_steady_state(args: argparse.Namespace) -> int:
     from . import state, steady_state
 
@@ -435,6 +455,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_ss.add_argument("--no-tier1", action="store_true", help="skip tier-1 stage")
     p_ss.add_argument("--dry-run", action="store_true", help="list stages without running")
     p_ss.set_defaults(func=_cmd_steady_state, repo=None, limit=None, full=False, wait=True)
+
+    p_auto = sub.add_parser("autonomy", help="graduated autonomy tools")
+    auto_sub = p_auto.add_subparsers(dest="autonomy_command", required=True)
+
+    p_auto_st = auto_sub.add_parser("status", help="show per-category precision and promotion")
+    p_auto_st.add_argument("--decisions-dir", default=".data/decisions")
+    p_auto_st.add_argument("--results-dir", default=".data/results")
+    p_auto_st.add_argument("--models-config", default=DEFAULT_MODELS)
+    p_auto_st.add_argument("--out", default="config/autonomy.yaml")
+    p_auto_st.add_argument("--write", action="store_true", help="write config/autonomy.yaml")
+    p_auto_st.set_defaults(func=_cmd_autonomy_status)
 
     return parser
 
