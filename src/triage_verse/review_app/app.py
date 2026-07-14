@@ -236,9 +236,32 @@ def app_audit_items(decisions_dir, results_dir) -> list[dict]:
                 "params": d.get("params"),
                 "batch_id": r.get("batch_id"),
                 "result_id": r.get("id"),
+                "proposal_id": d.get("proposal_id"),
             }
         )
     return out
+
+
+def app_audit_reject(item: dict, *, decisions_dir=DECISIONS_DIR) -> str:
+    """Record a rejected decision for an audited auto-apply and return the undo command."""
+    rec = {
+        "id": __import__("uuid").uuid4().hex,
+        "proposal_id": item["proposal_id"],
+        "repo": item["repo"],
+        "issue": item["issue"],
+        "action": item["action"],
+        "params": item["params"],
+        "verdict": "rejected",
+        "decided_by": "human",
+        "decided_at": __import__("datetime")
+        .datetime.now(__import__("datetime").timezone.utc)
+        .strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    decisions.write([rec], decisions_dir)
+    return (
+        f"triage-verse undo --batch {item['batch_id']}"
+        f" --issue {item['repo']}#{item['issue']} --apply"
+    )
 
 
 def app_tier2_label(repo: str, number: int, *, run_gh=gh.run_gh) -> None:
@@ -798,7 +821,39 @@ def server(input: Inputs, output: Outputs, session: Session):
                     ),
                 )
             )
+        # Wire dynamic handlers for each audit item's buttons
+        for item in items:
+            rid = item["result_id"]
+            _wire_audit_buttons(input, item, rid)
+
         return ui.div(*rows)
+
+    audit_wired: set[str] = set()
+
+    def _wire_audit_buttons(input: Inputs, item: dict, rid: str) -> None:
+        if rid in audit_wired:
+            return
+        audit_wired.add(rid)
+        confirm_id = f"audit_confirm_{rid}"
+        reject_id = f"audit_reject_{rid}"
+
+        @reactive.effect
+        @reactive.event(getattr(input, confirm_id))
+        def _confirm(item=item):
+            ui.notification_show(
+                f"Confirmed: {item['repo']}#{item['issue']} — no action needed.",
+                type="message",
+            )
+
+        @reactive.effect
+        @reactive.event(getattr(input, reject_id))
+        def _reject(item=item):
+            undo_cmd = app_audit_reject(item)
+            ui.notification_show(
+                f"Rejected. Undo: {undo_cmd}",
+                type="warning",
+                duration=None,
+            )
 
 
 app = App(app_ui, server)
