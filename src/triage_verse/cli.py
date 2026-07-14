@@ -165,6 +165,49 @@ def _cmd_execute(args: argparse.Namespace) -> int:
     return 1 if summary["counts"]["error"] else 0
 
 
+def _run_git(args, *, cwd=None):
+    import subprocess
+    return subprocess.run(
+        ["git", *args], cwd=cwd, capture_output=True, text=True,
+        encoding="utf-8", check=True,
+    ).stdout
+
+
+def _ensure_state_clone(work_dir: str, branch: str) -> None:
+    if pathlib.Path(work_dir, ".git").exists():
+        return
+    origin = gh.run_gh(["repo", "view", "--json", "url", "-q", ".url"]).strip()
+    _run_git(["clone", "--branch", branch, "--single-branch", origin, work_dir])
+
+
+def _state_now() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _cmd_state_pull(args: argparse.Namespace) -> int:
+    from . import state
+    work = os.environ.get("TRIAGE_VERSE_STATE_WORKDIR", ".data/triage-state")
+    _ensure_state_clone(work, args.branch)
+    res = state.pull(data_dir=args.data_dir, work_dir=work, run_git=_run_git, branch=args.branch)
+    print(f"pulled: {res['files_updated']} files updated")
+    return 0
+
+
+def _cmd_state_push(args: argparse.Namespace) -> int:
+    from . import state
+    con = _open_db(args.db)
+    repos = [r.full for r in config.load_repos(args.config)]
+    work = os.environ.get("TRIAGE_VERSE_STATE_WORKDIR", ".data/triage-state")
+    _ensure_state_clone(work, args.branch)
+    res = state.push(
+        con, repos, data_dir=args.data_dir, work_dir=work, run_git=_run_git,
+        branch=args.branch, now=_state_now(),
+    )
+    print(f"push: {'committed' if res['pushed'] else 'no changes'} ({res['records']} records)")
+    return 0
+
+
 def _cmd_undo(args: argparse.Namespace) -> int:
     args.db = _env_default(args.db, "TRIAGE_VERSE_DB", DEFAULT_DB)
     args.results_dir = _env_default(
@@ -284,6 +327,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--apply", action="store_true", help="perform mutations (default: dry-run)"
     )
     p_undo.set_defaults(func=_cmd_undo)
+
+    p_state = sub.add_parser("state", help="sync state bus via git")
+    state_sub = p_state.add_subparsers(dest="state_command", required=True)
+
+    p_pull = state_sub.add_parser("pull", help="pull state from remote branch")
+    p_pull.add_argument("--branch", default="triage-state")
+    p_pull.add_argument("--data-dir", default=".data")
+    p_pull.set_defaults(func=_cmd_state_pull)
+
+    p_push = state_sub.add_parser("push", help="push state to remote branch")
+    p_push.add_argument("--branch", default="triage-state")
+    p_push.add_argument("--data-dir", default=".data")
+    p_push.add_argument("--db", default=DEFAULT_DB)
+    p_push.add_argument("--config", default=DEFAULT_CONFIG)
+    p_push.set_defaults(func=_cmd_state_push)
 
     return parser
 
