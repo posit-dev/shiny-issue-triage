@@ -25,10 +25,11 @@ jobs:
       - name: Guard - label present and issue open
         env:
           GH_TOKEN: ${{ github.token }}
+          INPUT_ISSUE: ${{ github.event.inputs.issue }}
         run: |
           set -euo pipefail
-          repo="${{ github.event.inputs.issue }}"; repo="${repo%%#*}"
-          num="${{ github.event.inputs.issue }}"; num="${num##*#}"
+          repo="${INPUT_ISSUE%%#*}"
+          num="${INPUT_ISSUE##*#}"
           state=$(gh issue view "$num" --repo "$repo" --json state,labels \
             --jq '.state + " " + ([.labels[].name] | join(","))')
           echo "$state" | grep -q "ai-triage:fix-requested" \
@@ -58,4 +59,6 @@ jobs:
           echo "Fix session runs here; opens a DRAFT PR referencing the issue."
           echo "gh pr create --draft --title ... --body ... referencing the issue"
       - name: Summary
-        run: echo "Tier 2 fix attempt for ${{ github.event.inputs.issue }}" >> "$GITHUB_STEP_SUMMARY"
+        env:
+          INPUT_ISSUE: ${{ github.event.inputs.issue }}
+        run: echo "Tier 2 fix attempt for ${INPUT_ISSUE}" >> "$GITHUB_STEP_SUMMARY"
