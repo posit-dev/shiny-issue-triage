@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import pathlib
-from typing import Any, Callable
+from typing import Callable
 
 from . import db as db_mod
 
@@ -51,6 +51,7 @@ def _rel(base: pathlib.Path, path: pathlib.Path) -> str:
 def _fetch_branch(run_git: RunGit, work_dir: pathlib.Path, branch: str) -> bool:
     """Fetch branch from origin; return True if it exists on remote."""
     import subprocess
+
     try:
         run_git(["fetch", "origin", branch], cwd=str(work_dir))
         return True
@@ -61,12 +62,12 @@ def _fetch_branch(run_git: RunGit, work_dir: pathlib.Path, branch: str) -> bool:
 def _checkout_or_create(run_git: RunGit, work_dir: pathlib.Path, branch: str) -> None:
     """Checkout branch, creating an orphan if it doesn't exist locally."""
     import subprocess
+
     try:
         run_git(["checkout", branch], cwd=str(work_dir))
     except subprocess.CalledProcessError:
         run_git(["checkout", "--orphan", branch], cwd=str(work_dir))
         # Remove any files from the index in the new orphan branch
-        import subprocess as _sp
         try:
             run_git(["rm", "-rf", "."], cwd=str(work_dir))
         except subprocess.CalledProcessError:
@@ -90,13 +91,22 @@ def pull(*, data_dir, work_dir, run_git: RunGit, branch: str = "triage-state") -
             updated += 1
     cur = work_dir / CURSORS_FILE
     if cur.exists():
-        (data_dir / CURSORS_FILE).write_text(cur.read_text(encoding="utf-8"), encoding="utf-8")
+        (data_dir / CURSORS_FILE).write_text(
+            cur.read_text(encoding="utf-8"), encoding="utf-8"
+        )
     return {"files_updated": updated}
 
 
 def push(
-    con, repos, *, data_dir, work_dir, run_git: RunGit,
-    branch: str = "triage-state", now: str, log: Callable[[str], None] = print,
+    con,
+    repos,
+    *,
+    data_dir,
+    work_dir,
+    run_git: RunGit,
+    branch: str = "triage-state",
+    now: str,
+    log: Callable[[str], None] = print,
 ) -> dict:
     data_dir = pathlib.Path(data_dir)
     work_dir = pathlib.Path(work_dir)

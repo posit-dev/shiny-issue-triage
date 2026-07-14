@@ -1,7 +1,6 @@
 """Push/pull round-trip for the triage-state bus against a local bare repo."""
 
 import json
-import pathlib
 import subprocess
 
 from triage_verse import db, state
@@ -16,6 +15,7 @@ def _git(args, cwd):
 def _run_git_factory(default_cwd):
     def run_git(args, *, cwd=None):
         return _git(args, cwd or default_cwd)
+
     return run_git
 
 
@@ -46,7 +46,11 @@ def test_push_then_pull_round_trips_records(tmp_path):
     # clone points at the bare remote
     _git(["clone", str(remote), str(work_a)], tmp_path)
     res = state.push(
-        con, ["o/r"], data_dir=data_a, work_dir=work_a, run_git=run_git_a,
+        con,
+        ["o/r"],
+        data_dir=data_a,
+        work_dir=work_a,
+        run_git=run_git_a,
         now="2026-07-13T00:00:00Z",
     )
     assert res["pushed"] is True
@@ -72,9 +76,13 @@ def test_push_with_no_changes_makes_no_commit(tmp_path):
     work = tmp_path / "work"
     _git(["clone", str(remote), str(work)], tmp_path)
     rg = _run_git_factory(str(work))
-    state.push(con, [], data_dir=data, work_dir=work, run_git=rg, now="2026-07-13T00:00:00Z")
+    state.push(
+        con, [], data_dir=data, work_dir=work, run_git=rg, now="2026-07-13T00:00:00Z"
+    )
     before = _git(["rev-list", "--count", "HEAD"], work).strip()
-    res = state.push(con, [], data_dir=data, work_dir=work, run_git=rg, now="2026-07-13T00:00:00Z")
+    res = state.push(
+        con, [], data_dir=data, work_dir=work, run_git=rg, now="2026-07-13T00:00:00Z"
+    )
     after = _git(["rev-list", "--count", "HEAD"], work).strip()
     assert res["pushed"] is False
     assert before == after
@@ -95,5 +103,6 @@ def test_export_cursors_shape():
 
 def test_state_cli_parses():
     from triage_verse import cli
+
     args = cli.build_parser().parse_args(["state", "push"])
     assert args.func is not None

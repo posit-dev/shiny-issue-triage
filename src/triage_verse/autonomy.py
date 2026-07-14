@@ -10,8 +10,11 @@ _FAILURE = {"rejected"}
 def category_precision(decisions: list[dict]) -> dict[str, dict]:
     out: dict[str, dict] = {}
     for action in {d.get("action") for d in decisions}:
+        if action is None:
+            continue
         judged = [
-            d for d in decisions
+            d
+            for d in decisions
             if d.get("action") == action
             and d.get("verdict") in _SUCCESS | _FAILURE
             and d.get("decided_by") != "autonomy"
@@ -27,13 +30,15 @@ def evaluate(decisions: list[dict], results: list[dict], cfg) -> dict[str, dict]
     out: dict[str, dict] = {}
     for action in ELIGIBLE:
         judged = [
-            d for d in decisions
+            d
+            for d in decisions
             if d.get("action") == action
             and d.get("verdict") in _SUCCESS | _FAILURE
             and d.get("decided_by") != "autonomy"
         ]
         audit_failures = sum(
-            1 for r in results
+            1
+            for r in results
             if r.get("action") == action and r.get("audit_verdict") == "rejected"
         )
         total = len(judged) + audit_failures
@@ -45,7 +50,8 @@ def evaluate(decisions: list[dict], results: list[dict], cfg) -> dict[str, dict]
             "reviewed": len(judged),
             "precision": precision,
             "audit_failures": audit_failures,
-            "promote": len(judged) >= cfg.min_decisions and precision >= cfg.min_precision,
+            "promote": len(judged) >= cfg.min_decisions
+            and precision >= cfg.min_precision,
         }
     return out
 

@@ -111,9 +111,19 @@ def _default_checkout(repo: str, cache_dir: str) -> str:
 
 def _default_runner(repo_dir: str, prompt: str) -> tuple[str, float]:
     proc = subprocess.run(
-        ["claude", "-p", prompt, "--add-dir", repo_dir,
-         "--allowedTools", "Read,Grep,Glob,Bash(git log:*),Bash(git show:*)"],
-        capture_output=True, text=True, cwd=repo_dir, timeout=_CLI_TIMEOUT,
+        [
+            "claude",
+            "-p",
+            prompt,
+            "--add-dir",
+            repo_dir,
+            "--allowedTools",
+            "Read,Grep,Glob,Bash(git log:*),Bash(git show:*)",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=repo_dir,
+        timeout=_CLI_TIMEOUT,
     )
     if proc.returncode != 0:
         raise RuntimeError(f"claude -p exited {proc.returncode}: {proc.stderr[:500]}")
@@ -122,14 +132,25 @@ def _default_runner(repo_dir: str, prompt: str) -> tuple[str, float]:
 
 def _today_tier1_count(records, today: str) -> int:
     return sum(
-        1 for r in records
+        1
+        for r in records
         if r.get("origin") == "tier1" and (r.get("created_at", "")[:10] == today)
     )
 
 
-def run(con, repos, *, cfg, proposals_dir, run_gh, runner=_default_runner,
-        checkout=_default_checkout, cache_dir=".data/checkouts", today=None,
-        log=print) -> dict:
+def run(
+    con,
+    repos,
+    *,
+    cfg,
+    proposals_dir,
+    run_gh,
+    runner=_default_runner,
+    checkout=_default_checkout,
+    cache_dir=".data/checkouts",
+    today=None,
+    log=print,
+) -> dict:
     today = today or _now()[:10]
     cap = cfg.tiers.tier1_max_per_day
     existing = review_queue.iter_jsonl_records(proposals_dir)
@@ -143,6 +164,8 @@ def run(con, repos, *, cfg, proposals_dir, run_gh, runner=_default_runner,
             halted = True
             break
         issue = db_mod.get_issue(con, c["repo"], c["issue"])
+        if issue is None:
+            continue
         comments = [dict(r) for r in db_mod.get_comments(con, c["repo"], c["issue"])]
         repo_dir = checkout(c["repo"], cache_dir)
         text, cost = runner(repo_dir, build_prompt(dict(issue), comments))
@@ -160,19 +183,30 @@ def run(con, repos, *, cfg, proposals_dir, run_gh, runner=_default_runner,
             proposals_made += 1
         else:
             _emit_noop(c, verdict["verdict"], proposals_dir)
-    return {"sessions": sessions, "proposals": proposals_made, "halted_on_budget": halted}
+    return {
+        "sessions": sessions,
+        "proposals": proposals_made,
+        "halted_on_budget": halted,
+    }
 
 
 def _emit_close(c, issue, verdict, proposals_dir, run_id) -> None:
-    evidence = [f"https://github.com/{c['repo']}/issues/{c['issue']}", *verdict.get("evidence", [])]
+    evidence = [
+        f"https://github.com/{c['repo']}/issues/{c['issue']}",
+        *verdict.get("evidence", []),
+    ]
     rec = {
         "id": uuid.uuid4().hex,
-        "repo": c["repo"], "issue": c["issue"],
+        "repo": c["repo"],
+        "issue": c["issue"],
         "issue_updated_at": issue["updated_at"],
-        "run_id": run_id, "model": "tier1", "origin": "tier1",
+        "run_id": run_id,
+        "model": "tier1",
+        "origin": "tier1",
         "confidence": verdict.get("confidence", 0.0),
         "evidence": evidence,
-        "action": "close", "params": {"reason": "fixed"},
+        "action": "close",
+        "params": {"reason": "fixed"},
         "rationale": verdict.get("summary", ""),
         "created_at": _now(),
     }
@@ -182,8 +216,11 @@ def _emit_close(c, issue, verdict, proposals_dir, run_id) -> None:
 def _emit_noop(c, verdict, proposals_dir) -> None:
     rec = {
         "id": uuid.uuid4().hex,
-        "repo": c["repo"], "issue": c["issue"],
-        "origin": "tier1", "action": "no-op", "verdict": verdict,
+        "repo": c["repo"],
+        "issue": c["issue"],
+        "origin": "tier1",
+        "action": "no-op",
+        "verdict": verdict,
         "created_at": _now(),
     }
     proposals.write([rec], proposals_dir)

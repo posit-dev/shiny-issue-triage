@@ -13,7 +13,16 @@ from typing import Callable
 
 from shiny import App, Inputs, Outputs, Session, module, reactive, render, ui
 
-from triage_verse import analytics, dashboard, db, decisions, drawer, gh, review_queue, tier2
+from triage_verse import (
+    analytics,
+    dashboard,
+    db,
+    decisions,
+    drawer,
+    gh,
+    review_queue,
+    tier2,
+)
 
 DB_PATH = os.environ.get("TRIAGE_VERSE_DB", ".data/mirror.sqlite")
 PROPOSALS_DIR = os.environ.get("TRIAGE_VERSE_PROPOSALS", ".data/proposals")
@@ -205,6 +214,32 @@ _repo_choices = ["All repos"] + [
         "SELECT DISTINCT repo FROM issues WHERE is_pr=0 ORDER BY repo"
     )
 ]
+
+
+def app_audit_items(decisions_dir, results_dir) -> list[dict]:
+    """Executed auto-approved decisions flagged for spot audit, needing confirm/reject."""
+    audit_decisions = {
+        d["id"]: d
+        for d in review_queue.iter_jsonl_records(decisions_dir)
+        if d.get("decided_by") == "autonomy" and d.get("audit") is True
+    }
+    out = []
+    for r in review_queue.iter_jsonl_records(results_dir):
+        d = audit_decisions.get(r.get("decision_id"))
+        if d is None or r.get("status") != "applied":
+            continue
+        out.append(
+            {
+                "repo": r["repo"],
+                "issue": r["issue"],
+                "action": r["action"],
+                "params": d.get("params"),
+                "batch_id": r.get("batch_id"),
+                "result_id": r.get("id"),
+            }
+        )
+    return out
+
 
 def app_tier2_label(repo: str, number: int, *, run_gh=gh.run_gh) -> None:
     """Apply the Tier-2 fix-requested label to an issue (used by the drawer button)."""
@@ -399,6 +434,18 @@ def _drawer_panel(state: dict, item: dict | None):
     return ui.tags.div(*parts, id="drawer-panel")
 
 
+audit_panel = ui.nav_panel(
+    "Audit",
+    ui.h4("Autonomy spot-audit queue"),
+    ui.p(
+        "Auto-approved decisions flagged for human confirmation. "
+        "Reject = precision failure; prints the undo command.",
+        class_="text-muted",
+    ),
+    ui.output_ui("audit_ui"),
+)
+
+
 app_ui = ui.page_navbar(
     ui.nav_panel(
         "Queue",
@@ -414,6 +461,7 @@ app_ui = ui.page_navbar(
         ui.output_ui("drawer_ui"),
     ),
     dashboard_panel,
+    audit_panel,
     title="Triage review",
     header=ui.TagList(ui.tags.style(_DRAWER_CSS + _KB_CSS), ui.tags.script(_KB_JS)),
 )
@@ -718,6 +766,39 @@ def server(input: Inputs, output: Outputs, session: Session):
                 f"${r['usd']:,.2f}",
             ],
         )
+
+    # --- Audit tab ---
+
+    @render.ui
+    def audit_ui():
+        items = app_audit_items(DECISIONS_DIR, RESULTS_DIR)
+        if not items:
+            return ui.p("No audit items — all clear.", class_="text-muted")
+        rows = []
+        for item in items:
+            rows.append(
+                ui.card(
+                    ui.card_header(
+                        f"{item['repo']}#{item['issue']} — {item['action']}"
+                    ),
+                    ui.p(f"params: {item['params']}"),
+                    ui.p(f"batch: {item['batch_id']}"),
+                    ui.div(
+                        ui.input_action_button(
+                            f"audit_confirm_{item['result_id']}",
+                            "Confirm",
+                            style="background-color: #2e7d32; color: white;",
+                        ),
+                        ui.input_action_button(
+                            f"audit_reject_{item['result_id']}",
+                            "Reject",
+                            style="background-color: #c62828; color: white;",
+                        ),
+                        style="display: flex; gap: 0.5rem;",
+                    ),
+                )
+            )
+        return ui.div(*rows)
 
 
 app = App(app_ui, server)
