@@ -131,6 +131,17 @@ def push(
     status = run_git(["status", "--porcelain"], cwd=str(work_dir))
     if not status.strip():
         return {"pushed": False, "records": records}
-    run_git(["commit", "-m", f"state: sync {records} records"], cwd=str(work_dir))
+    run_git(
+        [
+            "-c",
+            "user.name=triage-verse",
+            "-c",
+            "user.email=triage-verse@users.noreply.github.com",
+            "commit",
+            "-m",
+            f"state: sync {records} records",
+        ],
+        cwd=str(work_dir),
+    )
     run_git(["push", "origin", branch], cwd=str(work_dir))
     return {"pushed": True, "records": records}
