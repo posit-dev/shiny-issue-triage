@@ -163,6 +163,8 @@ def _cmd_execute(args: argparse.Namespace) -> int:
         templates_dir=args.templates,
         run_gh=gh.run_gh,
         apply=args.apply,
+        auto=args.auto,
+        autonomy_path=args.autonomy,
         repo=args.repo,
         limit=args.limit,
     )
@@ -402,6 +404,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_exec.add_argument("--limit", type=int, help="max decisions this run")
     p_exec.add_argument(
         "--apply", action="store_true", help="perform mutations (default: dry-run)"
+    )
+    p_exec.add_argument(
+        "--auto", action="store_true", help="auto-approve promoted proposals"
+    )
+    p_exec.add_argument(
+        "--autonomy", default="config/autonomy.yaml",
+        help="path to autonomy config (default: config/autonomy.yaml)",
     )
     p_exec.set_defaults(func=_cmd_execute)
 

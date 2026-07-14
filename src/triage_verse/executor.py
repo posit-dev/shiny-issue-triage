@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import pathlib
 import re
 import sqlite3
 import time
@@ -16,7 +18,7 @@ from . import templates as templates_mod
 RunGh = Callable[..., str]
 
 FINAL_STATUSES = frozenset({"applied", "stale-needs-rereview", "error"})
-EXECUTABLE_VERDICTS = frozenset({"approved", "edited"})
+EXECUTABLE_VERDICTS = frozenset({"approved", "edited", "auto-approved"})
 
 
 def _now() -> str:
@@ -77,6 +79,40 @@ def parse_issue_ref(text: str, default_repo: str) -> tuple[str, int] | None:
 
 def _issue_url(repo: str, number: int) -> str:
     return f"https://github.com/{repo}/issues/{number}"
+
+
+AUTO_ELIGIBLE = ("add-label", "set-priority")
+
+
+def load_autonomy(path) -> dict:
+    p = pathlib.Path(path)
+    if not p.exists():
+        return {}
+    import yaml
+    doc = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    return doc.get("promoted") or {}
+
+
+def _audit_flag(proposal_id: str, audit_rate: float) -> bool:
+    if audit_rate <= 0:
+        return False
+    h = int(hashlib.sha256(proposal_id.encode()).hexdigest()[:8], 16)
+    return (h % 100) < round(audit_rate * 100)
+
+
+def select_auto(proposals, decided_ids, promoted, *, audit_rate: float) -> list[dict]:
+    out = []
+    for p in proposals:
+        if p.get("id") in decided_ids:
+            continue
+        action = p.get("action")
+        if action not in AUTO_ELIGIBLE or action not in promoted:
+            continue
+        floor = promoted[action].get("confidence_floor", 1.0)
+        if (p.get("confidence") or 0.0) < floor:
+            continue
+        out.append({**p, "audit": _audit_flag(p["id"], audit_rate)})
+    return out
 
 
 def plan_decision(
@@ -295,6 +331,9 @@ def execute(
     results_dir: Any,
     run_gh: RunGh,
     apply: bool = False,
+    auto: bool = False,
+    autonomy_path: str = "config/autonomy.yaml",
+    audit_rate: float = 0.10,
     repo: str | None = None,
     limit: int | None = None,
     labels_path: str = ".github/triage/labels.yaml",
@@ -303,6 +342,24 @@ def execute(
     log: Callable[[str], None] = print,
 ) -> dict:
     """Apply approved decisions to GitHub (dry-run unless apply=True)."""
+    if auto and apply:
+        promoted = load_autonomy(autonomy_path)
+        all_props = review_queue.iter_jsonl_records(proposals_dir)
+        decided = {d.get("proposal_id") for d in review_queue.iter_jsonl_records(decisions_dir)}
+        auto_props = select_auto(all_props, decided, promoted, audit_rate=audit_rate)
+        synthetic = []
+        for p in auto_props:
+            rec = {
+                "id": uuid.uuid4().hex, "proposal_id": p["id"], "repo": p["repo"],
+                "issue": p["issue"], "action": p["action"], "params": p["params"],
+                "verdict": "auto-approved", "decided_by": "autonomy",
+                "confidence": p.get("confidence"), "audit": p["audit"],
+                "decided_at": _now(),
+            }
+            synthetic.append(rec)
+        if synthetic:
+            jsonl_log.append_weekly(synthetic, decisions_dir)
+
     tmpl = templates_mod.load(templates_dir)
     allowed = prompts.allowed_labels(labels_path)
     proposals_index = index_proposals(review_queue.iter_jsonl_records(proposals_dir))
