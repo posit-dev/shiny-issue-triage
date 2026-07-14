@@ -100,7 +100,8 @@ def _cmd_embed(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_analyze(args: argparse.Namespace) -> int:
+def _run_analyze(args: argparse.Namespace) -> None:
+    """Shared analyze logic used by both the `analyze` command and `steady-state`."""
     cfg = config.load_models_config(args.models_config)
     con = _open_db(args.db)
     embedder = embed_mod.FastEmbedEmbedder(cfg.embed_model)
@@ -122,6 +123,10 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
         f"classified={summary['classified']} rechecked={summary['rechecked']} "
         f"pairs={summary['pairs']} halted_on_budget={summary['halted_on_budget']}"
     )
+
+
+def _cmd_analyze(args: argparse.Namespace) -> int:
+    _run_analyze(args)
     return 0
 
 
@@ -224,6 +229,46 @@ def _cmd_undo(args: argparse.Namespace) -> int:
     )
     print(f"batch {summary['batch_id']}: {summary['counts']}")
     return 1 if summary["counts"]["error"] else 0
+
+
+def _cmd_steady_state(args: argparse.Namespace) -> int:
+    from . import state, steady_state
+
+    con = _open_db(args.db)
+    repos = [r.full for r in config.load_repos(args.config)]
+    work = os.environ.get("TRIAGE_VERSE_STATE_WORKDIR", ".data/triage-state")
+
+    def _pull():
+        _ensure_state_clone(work, args.branch)
+        state.pull(data_dir=args.data_dir, work_dir=work, run_git=_run_git, branch=args.branch)
+
+    def _sync():
+        sync_mod.sync_all(con, repos, full=False, log=print)
+
+    def _analyze():
+        _run_analyze(args)
+
+    def _tier1():
+        if not args.no_tier1:
+            from . import tier1
+            tier1.run(con, repos, cfg=config.load_models_config(args.models_config),
+                      proposals_dir=args.proposals_dir, run_gh=gh.run_gh, log=print)
+
+    def _push():
+        state.push(con, repos, data_dir=args.data_dir, work_dir=work, run_git=_run_git,
+                   branch=args.branch, now=_state_now())
+
+    def _snapshot():
+        snapshot_mod.publish(args.db, dated=False)
+
+    stages = [("state-pull", _pull), ("sync", _sync), ("embed-analyze", _analyze),
+              ("tier1", _tier1), ("state-push", _push), ("snapshot", _snapshot)]
+    if args.dry_run:
+        for name, _ in stages:
+            print(f"would run: {name}")
+        return 0
+    res = steady_state.run(stages)
+    return 1 if res["failed"] else 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -342,6 +387,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_push.add_argument("--db", default=DEFAULT_DB)
     p_push.add_argument("--config", default=DEFAULT_CONFIG)
     p_push.set_defaults(func=_cmd_state_push)
+
+    p_ss = sub.add_parser("steady-state", help="run full steady-state loop")
+    p_ss.add_argument("--db", default=os.environ.get("TRIAGE_VERSE_DB", DEFAULT_DB))
+    p_ss.add_argument("--config", default=DEFAULT_CONFIG)
+    p_ss.add_argument("--models-config", default=DEFAULT_MODELS)
+    p_ss.add_argument("--proposals-dir", default=DEFAULT_PROPOSALS)
+    p_ss.add_argument("--data-dir", default=".data")
+    p_ss.add_argument("--branch", default="triage-state")
+    p_ss.add_argument("--no-tier1", action="store_true", help="skip tier-1 stage")
+    p_ss.add_argument("--dry-run", action="store_true", help="list stages without running")
+    p_ss.set_defaults(func=_cmd_steady_state, repo=None, limit=None, full=False, wait=True)
 
     return parser
 
