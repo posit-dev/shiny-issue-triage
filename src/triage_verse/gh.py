@@ -220,7 +220,10 @@ def run_gh(
     input: str | None = None,
     retries: int = 5,
     sleep: Callable[[float], None] = time.sleep,
+    operation: str | None = None,
+    repos: list[str] | None = None,
 ) -> str:
+    classify_gh_call(args, input=input, operation=operation, repos=repos)
     delay = 30.0
     last_error = "gh failed"
     for attempt in range(retries):
@@ -262,6 +265,31 @@ def gh_graphql(query: str, variables: dict, **kwargs: Any) -> dict:
     # gh exits 1 for most GraphQL errors (including RATE_LIMITED), so run_gh
     # handles retry. This guard catches the rare HTTP-200-with-errors case
     # (partial success), which is not retried.
+    if body.get("errors"):
+        raise GhError(json.dumps(body["errors"]))
+    return body["data"]
+
+
+def gh_mutation(
+    operation: str,
+    query: str,
+    variables: dict,
+    *,
+    repos: list[str],
+    **kwargs: Any,
+) -> dict:
+    """Dispatch a guarded GraphQL mutation. Single write path for issue writes."""
+    if operation not in ALLOWED_OPERATIONS:
+        raise EgressRefused(f"operation not allowlisted: {operation!r}")
+    payload = json.dumps({"query": query, "variables": variables})
+    out = run_gh(
+        ["api", "graphql", "--input", "-"],
+        input=payload,
+        operation=operation,
+        repos=repos,
+        **kwargs,
+    )
+    body = json.loads(out)
     if body.get("errors"):
         raise GhError(json.dumps(body["errors"]))
     return body["data"]

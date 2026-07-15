@@ -1,4 +1,6 @@
 import json
+import json as _json
+import subprocess
 
 import pytest
 
@@ -170,3 +172,54 @@ def test_mutation_fields_catches_aliased_injection():
     q = "mutation { safe: addComment(input: {}) { x } evil: deleteRepository(input: {}) { y } }"
     fields = gh._mutation_fields(q)
     assert "addComment" in fields and "deleteRepository" in fields
+
+
+# --- run_gh guard integration + gh_mutation --------------------------------
+
+
+class _FakeProc:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def test_run_gh_refuses_porcelain_write_before_subprocess(monkeypatch):
+    launched = []
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **k: launched.append(cmd))
+    with pytest.raises(gh.EgressRefused):
+        gh.run_gh(["issue", "edit", "5", "--repo", "o/r", "--add-label", "bug"])
+    assert launched == []  # refused before ever launching gh
+
+
+def test_run_gh_allows_read(monkeypatch):
+    monkeypatch.setattr(
+        subprocess, "run", lambda cmd, **k: _FakeProc(stdout='{"ok": true}')
+    )
+    assert gh.run_gh(["api", "repos/o/r/issues/5"]) == '{"ok": true}'
+
+
+def test_gh_mutation_validates_and_dispatches(monkeypatch):
+    seen = {}
+
+    def fake_run(args, *, input=None, operation=None, repos=None, **kw):
+        seen["args"], seen["operation"], seen["repos"] = args, operation, repos
+        seen["payload"] = _json.loads(input)
+        return _json.dumps({"data": {"closeIssue": {"issue": {"id": "N1"}}}})
+
+    monkeypatch.setattr(gh, "run_gh", fake_run)
+    data = gh.gh_mutation(
+        "closeIssue",
+        "mutation($id: ID!) { closeIssue(input: {issueId: $id}) { issue { id } } }",
+        {"id": "N1"},
+        repos=["o/r"],
+    )
+    assert data == {"closeIssue": {"issue": {"id": "N1"}}}
+    assert seen["operation"] == "closeIssue"
+    assert seen["repos"] == ["o/r"]
+    assert seen["args"] == ["api", "graphql", "--input", "-"]
+
+
+def test_gh_mutation_refuses_unknown_operation():
+    with pytest.raises(gh.EgressRefused, match="operation"):
+        gh.gh_mutation("deleteRepository", "mutation { x }", {}, repos=["o/r"])
