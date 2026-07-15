@@ -80,19 +80,19 @@ def _env_default(value: str | None, env: str, fallback: str) -> str:
 
 
 def _cmd_sync(args: argparse.Namespace) -> int:
+    out = args._out
     repos = [r.full for r in config.load_repos(args.config)]
     if args.repo:
         if args.repo not in repos:
-            print(f"error: {args.repo} is not in {args.config}")
-            return 1
+            return out.fail(f"{args.repo} is not in {args.config}")
         repos = [args.repo]
     con = _open_db(args.db)
-    totals = sync_mod.sync_all(con, repos, full=args.full, log=print)
-    print(
+    totals = sync_mod.sync_all(con, repos, full=args.full, log=out.log)
+    human = (
         f"synced {totals['repos']} repos: {totals['issues']} issues, "
         f"{totals['prs']} PRs, {totals['comments']} comments"
     )
-    return 0
+    return out.emit(totals, human)
 
 
 def _cmd_snapshot_publish(args: argparse.Namespace) -> int:
@@ -420,41 +420,53 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="triage-verse")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_sync = sub.add_parser("sync", help="mirror issues/PRs/comments to SQLite")
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument(
+        "--json",
+        dest="json_mode",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="emit a single JSON envelope on stdout; logs go to stderr",
+    )
+    parser.add_argument(
+        "--json", dest="json_mode", action="store_true", default=False
+    )
+
+    p_sync = sub.add_parser("sync", help="mirror issues/PRs/comments to SQLite", parents=[common])
     p_sync.add_argument("--db", default=DEFAULT_DB)
     p_sync.add_argument("--config", default=DEFAULT_CONFIG)
     p_sync.add_argument("--repo", help="sync only this owner/name")
     p_sync.add_argument(
         "--full", action="store_true", help="ignore cursors and re-walk everything"
     )
-    p_sync.set_defaults(func=_cmd_sync)
+    p_sync.set_defaults(func=_cmd_sync, cmdname="sync")
 
-    p_snap = sub.add_parser("snapshot", help="publish or fetch mirror snapshots")
+    p_snap = sub.add_parser("snapshot", help="publish or fetch mirror snapshots", parents=[common])
     snap_sub = p_snap.add_subparsers(dest="snapshot_command", required=True)
 
-    p_pub = snap_sub.add_parser("publish")
+    p_pub = snap_sub.add_parser("publish", parents=[common])
     p_pub.add_argument("--db", default=DEFAULT_DB)
     p_pub.add_argument(
         "--dated",
         action="store_true",
         help="also cut a dated mirror-YYYY-MM-DD restore point",
     )
-    p_pub.set_defaults(func=_cmd_snapshot_publish)
+    p_pub.set_defaults(func=_cmd_snapshot_publish, cmdname="snapshot publish")
 
-    p_boot = snap_sub.add_parser("bootstrap")
+    p_boot = snap_sub.add_parser("bootstrap", parents=[common])
     p_boot.add_argument("--db", default=DEFAULT_DB)
     p_boot.add_argument("--force", action="store_true")
-    p_boot.set_defaults(func=_cmd_snapshot_bootstrap)
+    p_boot.set_defaults(func=_cmd_snapshot_bootstrap, cmdname="snapshot bootstrap")
 
-    p_an = sub.add_parser("analytics", help="compute burndown analytics")
+    p_an = sub.add_parser("analytics", help="compute burndown analytics", parents=[common])
     an_sub = p_an.add_subparsers(dest="analytics_command", required=True)
-    p_exp = an_sub.add_parser("export")
+    p_exp = an_sub.add_parser("export", parents=[common])
     p_exp.add_argument("--db", default=DEFAULT_DB)
     p_exp.add_argument("--out", default=".data/analytics.json")
-    p_exp.set_defaults(func=_cmd_analytics_export)
+    p_exp.set_defaults(func=_cmd_analytics_export, cmdname="analytics export")
 
     p_ver = sub.add_parser(
-        "verify-counts", help="reconcile mirror vs GitHub open-issue counts"
+        "verify-counts", help="reconcile mirror vs GitHub open-issue counts", parents=[common]
     )
     p_ver.add_argument("--db", default=DEFAULT_DB)
     p_ver.add_argument("--config", default=DEFAULT_CONFIG)
@@ -464,17 +476,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=2,
         help="max mirror-vs-github drift treated as OK",
     )
-    p_ver.set_defaults(func=_cmd_verify_counts)
+    p_ver.set_defaults(func=_cmd_verify_counts, cmdname="verify-counts")
 
-    p_embed = sub.add_parser("embed", help="compute/update issue embeddings")
+    p_embed = sub.add_parser("embed", help="compute/update issue embeddings", parents=[common])
     p_embed.add_argument("--db", default=DEFAULT_DB)
     p_embed.add_argument("--config", default=DEFAULT_CONFIG)
     p_embed.add_argument("--models-config", default=DEFAULT_MODELS)
     p_embed.add_argument("--repo")
     p_embed.add_argument("--full", action="store_true")
-    p_embed.set_defaults(func=_cmd_embed)
+    p_embed.set_defaults(func=_cmd_embed, cmdname="embed")
 
-    p_an = sub.add_parser("analyze", help="classify + dedup -> proposals (Batch API)")
+    p_an = sub.add_parser("analyze", help="classify + dedup -> proposals (Batch API)", parents=[common])
     p_an.add_argument("--db", default=DEFAULT_DB)
     p_an.add_argument("--models-config", default=DEFAULT_MODELS)
     p_an.add_argument("--repo")
@@ -482,16 +494,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_an.add_argument("--full", action="store_true")
     p_an.add_argument("--wait", action="store_true")
     p_an.add_argument("--proposals-dir", default=DEFAULT_PROPOSALS)
-    p_an.set_defaults(func=_cmd_analyze)
+    p_an.set_defaults(func=_cmd_analyze, cmdname="analyze")
 
     p_st = sub.add_parser(
-        "analyze-status", help="show in-flight batches and today's spend"
+        "analyze-status", help="show in-flight batches and today's spend", parents=[common]
     )
     p_st.add_argument("--db", default=DEFAULT_DB)
-    p_st.set_defaults(func=_cmd_analyze_status)
+    p_st.set_defaults(func=_cmd_analyze_status, cmdname="analyze-status")
 
     p_exec = sub.add_parser(
-        "execute", help="apply approved decisions (dry-run by default)"
+        "execute", help="apply approved decisions (dry-run by default)", parents=[common]
     )
     p_exec.add_argument("--db", default=None)
     p_exec.add_argument("--decisions-dir", default=None)
@@ -512,10 +524,10 @@ def build_parser() -> argparse.ArgumentParser:
         default="config/autonomy.yaml",
         help="path to autonomy config (default: config/autonomy.yaml)",
     )
-    p_exec.set_defaults(func=_cmd_execute)
+    p_exec.set_defaults(func=_cmd_execute, cmdname="execute")
 
     p_undo = sub.add_parser(
-        "undo", help="reverse an executed batch (dry-run by default)"
+        "undo", help="reverse an executed batch (dry-run by default)", parents=[common]
     )
     p_undo.add_argument("--db", default=None)
     p_undo.add_argument("--results-dir", default=None)
@@ -524,37 +536,37 @@ def build_parser() -> argparse.ArgumentParser:
     p_undo.add_argument(
         "--apply", action="store_true", help="perform mutations (default: dry-run)"
     )
-    p_undo.set_defaults(func=_cmd_undo)
+    p_undo.set_defaults(func=_cmd_undo, cmdname="undo")
 
-    p_state = sub.add_parser("state", help="sync state bus via git")
+    p_state = sub.add_parser("state", help="sync state bus via git", parents=[common])
     state_sub = p_state.add_subparsers(dest="state_command", required=True)
 
-    p_pull = state_sub.add_parser("pull", help="pull state from remote branch")
+    p_pull = state_sub.add_parser("pull", help="pull state from remote branch", parents=[common])
     p_pull.add_argument("--branch", default="triage-state")
     p_pull.add_argument("--data-dir", default=".data")
-    p_pull.set_defaults(func=_cmd_state_pull)
+    p_pull.set_defaults(func=_cmd_state_pull, cmdname="state pull")
 
-    p_push = state_sub.add_parser("push", help="push state to remote branch")
+    p_push = state_sub.add_parser("push", help="push state to remote branch", parents=[common])
     p_push.add_argument("--branch", default="triage-state")
     p_push.add_argument("--data-dir", default=".data")
     p_push.add_argument("--db", default=DEFAULT_DB)
     p_push.add_argument("--config", default=DEFAULT_CONFIG)
-    p_push.set_defaults(func=_cmd_state_push)
+    p_push.set_defaults(func=_cmd_state_push, cmdname="state push")
 
-    p_t1 = sub.add_parser("tier1", help="run tier-1 'already fixed?' sessions")
+    p_t1 = sub.add_parser("tier1", help="run tier-1 'already fixed?' sessions", parents=[common])
     p_t1.add_argument("--db", default=DEFAULT_DB)
     p_t1.add_argument("--config", default=DEFAULT_CONFIG)
     p_t1.add_argument("--models-config", default=DEFAULT_MODELS)
     p_t1.add_argument("--repo")
     p_t1.add_argument("--proposals-dir", default=DEFAULT_PROPOSALS)
-    p_t1.set_defaults(func=_cmd_tier1)
+    p_t1.set_defaults(func=_cmd_tier1, cmdname="tier1")
 
-    p_t2 = sub.add_parser("tier2", help="label an issue for AI draft-PR fix")
+    p_t2 = sub.add_parser("tier2", help="label an issue for AI draft-PR fix", parents=[common])
     p_t2.add_argument("issue", help="owner/repo#N")
     p_t2.add_argument("--model", choices=["sonnet", "opus"], default="sonnet")
-    p_t2.set_defaults(func=_cmd_tier2)
+    p_t2.set_defaults(func=_cmd_tier2, cmdname="tier2")
 
-    p_ss = sub.add_parser("steady-state", help="run full steady-state loop")
+    p_ss = sub.add_parser("steady-state", help="run full steady-state loop", parents=[common])
     p_ss.add_argument("--db", default=os.environ.get("TRIAGE_VERSE_DB", DEFAULT_DB))
     p_ss.add_argument("--config", default=DEFAULT_CONFIG)
     p_ss.add_argument("--models-config", default=DEFAULT_MODELS)
@@ -566,14 +578,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="list stages without running"
     )
     p_ss.set_defaults(
-        func=_cmd_steady_state, repo=None, limit=None, full=False, wait=True
+        func=_cmd_steady_state, cmdname="steady-state", repo=None, limit=None, full=False, wait=True
     )
 
-    p_auto = sub.add_parser("autonomy", help="graduated autonomy tools")
+    p_auto = sub.add_parser("autonomy", help="graduated autonomy tools", parents=[common])
     auto_sub = p_auto.add_subparsers(dest="autonomy_command", required=True)
 
     p_auto_st = auto_sub.add_parser(
-        "status", help="show per-category precision and promotion"
+        "status", help="show per-category precision and promotion", parents=[common]
     )
     p_auto_st.add_argument("--decisions-dir", default=".data/decisions")
     p_auto_st.add_argument("--results-dir", default=".data/results")
@@ -582,7 +594,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_auto_st.add_argument(
         "--write", action="store_true", help="write config/autonomy.yaml"
     )
-    p_auto_st.set_defaults(func=_cmd_autonomy_status)
+    p_auto_st.set_defaults(func=_cmd_autonomy_status, cmdname="autonomy status")
 
     return parser
 
@@ -595,4 +607,21 @@ def main(argv: list[str] | None = None) -> int:
     if isinstance(sys.stdout, io.TextIOWrapper):
         sys.stdout.reconfigure(line_buffering=True)
     args = build_parser().parse_args(argv)
-    return args.func(args)
+    out = Output(args.cmdname, bool(getattr(args, "json_mode", False)))
+    args._out = out
+    try:
+        return args.func(args)
+    except Exception as exc:  # noqa: BLE001 - re-raised in human mode
+        if out.json_mode:
+            print(
+                json.dumps(
+                    {
+                        "command": out.command,
+                        "ok": False,
+                        "exit_code": 1,
+                        "error": str(exc),
+                    }
+                )
+            )
+            return 1
+        raise

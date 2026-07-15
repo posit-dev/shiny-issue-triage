@@ -1,6 +1,8 @@
 import json
 
 from triage_verse.cli import Output
+from triage_verse import cli
+from triage_verse import sync as sync_mod
 
 
 def test_emit_json_envelope_success(capsys):
@@ -54,3 +56,87 @@ def test_log_routes_to_stdout_in_human_mode(capsys):
     Output("sync", json_mode=False).log("progress")
     out = capsys.readouterr()
     assert out.out.strip() == "progress"
+
+
+def _repos_cfg(tmp_path):
+    cfg = tmp_path / "repos.yaml"
+    cfg.write_text("repositories:\n  - rstudio/shiny\n")
+    return cfg
+
+
+def test_sync_json_envelope(tmp_path, monkeypatch, capsys):
+    cfg = _repos_cfg(tmp_path)
+    monkeypatch.setattr(
+        sync_mod,
+        "sync_all",
+        lambda con, repos, *, full, log: {"repos": 1, "issues": 2, "prs": 0, "comments": 3},
+    )
+    rc = cli.main(["sync", "--json", "--db", str(tmp_path / "m.sqlite"), "--config", str(cfg)])
+    assert rc == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["command"] == "sync"
+    assert doc["ok"] is True
+    assert doc["data"] == {"repos": 1, "issues": 2, "prs": 0, "comments": 3}
+
+
+def test_json_flag_accepted_before_subcommand(tmp_path, monkeypatch, capsys):
+    cfg = _repos_cfg(tmp_path)
+    monkeypatch.setattr(
+        sync_mod,
+        "sync_all",
+        lambda con, repos, *, full, log: {"repos": 1, "issues": 0, "prs": 0, "comments": 0},
+    )
+    rc = cli.main(["--json", "sync", "--db", str(tmp_path / "m.sqlite"), "--config", str(cfg)])
+    assert rc == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["ok"] is True and doc["command"] == "sync"
+
+
+def test_sync_logs_go_to_stderr_in_json_mode(tmp_path, monkeypatch, capsys):
+    cfg = _repos_cfg(tmp_path)
+
+    def fake_sync_all(con, repos, *, full, log):
+        log("mirroring rstudio/shiny")
+        return {"repos": 1, "issues": 0, "prs": 0, "comments": 0}
+
+    monkeypatch.setattr(sync_mod, "sync_all", fake_sync_all)
+    cli.main(["sync", "--json", "--db", str(tmp_path / "m.sqlite"), "--config", str(cfg)])
+    out = capsys.readouterr()
+    assert "mirroring" in out.err
+    json.loads(out.out)  # stdout is exactly the envelope, still parseable
+
+
+def test_sync_unknown_repo_json_error(tmp_path, capsys):
+    cfg = _repos_cfg(tmp_path)
+    rc = cli.main(
+        ["sync", "--json", "--db", str(tmp_path / "m.sqlite"), "--config", str(cfg), "--repo", "rstudio/nope"]
+    )
+    assert rc == 1
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["ok"] is False and doc["exit_code"] == 1 and "nope" in doc["error"]
+
+
+def test_unexpected_exception_becomes_json_envelope(tmp_path, monkeypatch, capsys):
+    cfg = _repos_cfg(tmp_path)
+
+    def boom(con, repos, *, full, log):
+        raise RuntimeError("network died")
+
+    monkeypatch.setattr(sync_mod, "sync_all", boom)
+    rc = cli.main(["sync", "--json", "--db", str(tmp_path / "m.sqlite"), "--config", str(cfg)])
+    assert rc == 1
+    doc = json.loads(capsys.readouterr().out)
+    assert doc == {"command": "sync", "ok": False, "exit_code": 1, "error": "network died"}
+
+
+def test_unexpected_exception_reraises_in_human_mode(tmp_path, monkeypatch):
+    import pytest
+
+    cfg = _repos_cfg(tmp_path)
+
+    def boom(con, repos, *, full, log):
+        raise RuntimeError("network died")
+
+    monkeypatch.setattr(sync_mod, "sync_all", boom)
+    with pytest.raises(RuntimeError, match="network died"):
+        cli.main(["sync", "--db", str(tmp_path / "m.sqlite"), "--config", str(cfg)])
