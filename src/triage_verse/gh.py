@@ -253,6 +253,26 @@ def run_gh(
     raise GhError(last_error)
 
 
+def add_issue_label(
+    repo: str, number: int, label: str, *, run_gh: "Callable[..., str] | None" = None
+) -> None:
+    """Add one label to an issue via the guarded GraphQL write path."""
+    from urllib.parse import quote
+
+    _run = run_gh if run_gh is not None else globals()["run_gh"]
+    node_id = json.loads(_run(["api", f"repos/{repo}/issues/{number}"]))["node_id"]
+    label_id = json.loads(
+        _run(["api", f"repos/{repo}/labels/{quote(label, safe='')}"])
+    )["node_id"]
+    query = (
+        "mutation($id: ID!, $labels: [ID!]!) { addLabelsToLabelable("
+        "input: {labelableId: $id, labelIds: $labels}) { clientMutationId } }"
+    )
+    gh_mutation(
+        "addLabelsToIssue", query, {"id": node_id, "labels": [label_id]}, repos=[repo]
+    )
+
+
 def gh_json(args: list[str], **kwargs: Any) -> Any:
     out = run_gh(args, **kwargs)
     return json.loads(out) if out.strip() else None

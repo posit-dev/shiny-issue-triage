@@ -1,8 +1,8 @@
-"""Shared fixtures for executor tests.
+"""Shared fixtures for tests that exercise the guarded GraphQL write path.
 
-The executor now calls gh_mod.gh_mutation() for writes, which internally calls
-the module-level gh.run_gh. This fixture patches gh.run_gh for all executor
-tests so mutations route through the test's FakeGh instance.
+gh_mutation() internally calls the module-level gh.run_gh. This fixture patches
+gh.run_gh for executor, tier2, and reprex tests so mutations route through the
+test's FakeGh instance.
 """
 
 from __future__ import annotations
@@ -29,10 +29,11 @@ class GhRelay:
 
 @pytest.fixture(autouse=True)
 def gh_relay(monkeypatch, request):
-    """Auto-patch gh.run_gh for executor tests (where gh_mutation must route to FakeGh)."""
+    """Auto-patch gh.run_gh for tests that use the guarded write path."""
     module = request.node.module.__name__ if hasattr(request.node, "module") else ""
-    if "test_executor" not in module:
-        yield GhRelay()  # no-op: don't patch for non-executor tests
+    _needs_relay = ("test_executor", "tier2", "reprex")
+    if not any(tag in module for tag in _needs_relay):
+        yield GhRelay()  # no-op: don't patch for unrelated tests
         return
     relay = GhRelay()
     monkeypatch.setattr(gh, "run_gh", relay)
