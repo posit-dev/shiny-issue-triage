@@ -4,6 +4,7 @@ from triage_verse import analytics as analytics_mod
 from triage_verse import analyze as analyze_mod
 from triage_verse import cli
 from triage_verse import executor as executor_mod
+from triage_verse import snapshot as snapshot_mod
 from triage_verse import sync as sync_mod
 from triage_verse import tier2
 from triage_verse import verify as verify_mod
@@ -284,3 +285,12 @@ def test_analytics_export_json_emits_payload(tmp_path, monkeypatch, capsys):
     doc = json.loads(capsys.readouterr().out)
     assert doc["command"] == "analytics export"
     assert doc["data"] == payload
+
+
+def test_snapshot_publish_json(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(snapshot_mod, "publish", lambda db, *, dated: snapshot_mod.LATEST_TAG)
+    rc = cli.main(["snapshot", "publish", "--json", "--db", str(tmp_path / "m.sqlite")])
+    assert rc == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["command"] == "snapshot publish"
+    assert doc["data"] == {"tag": snapshot_mod.LATEST_TAG, "latest_tag": snapshot_mod.LATEST_TAG}

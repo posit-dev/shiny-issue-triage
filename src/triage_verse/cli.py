@@ -96,18 +96,22 @@ def _cmd_sync(args: argparse.Namespace) -> int:
 
 
 def _cmd_snapshot_publish(args: argparse.Namespace) -> int:
+    out = args._out
     tag = snapshot_mod.publish(args.db, dated=args.dated)
     if tag == snapshot_mod.LATEST_TAG:
-        print(f"published snapshot to release {tag}")
+        human = f"published snapshot to release {tag}"
     else:
-        print(f"published snapshot to releases {tag} and {snapshot_mod.LATEST_TAG}")
-    return 0
+        human = f"published snapshot to releases {tag} and {snapshot_mod.LATEST_TAG}"
+    return out.emit({"tag": tag, "latest_tag": snapshot_mod.LATEST_TAG}, human)
 
 
 def _cmd_snapshot_bootstrap(args: argparse.Namespace) -> int:
+    out = args._out
     snapshot_mod.bootstrap(args.db, force=args.force)
-    print(f"bootstrapped {args.db} from {snapshot_mod.LATEST_TAG}")
-    return 0
+    return out.emit(
+        {"db": args.db, "tag": snapshot_mod.LATEST_TAG},
+        f"bootstrapped {args.db} from {snapshot_mod.LATEST_TAG}",
+    )
 
 
 def _cmd_analytics_export(args: argparse.Namespace) -> int:
@@ -263,18 +267,19 @@ def _state_now() -> str:
 def _cmd_state_pull(args: argparse.Namespace) -> int:
     from . import state
 
+    out = args._out
     work = os.environ.get("TRIAGE_VERSE_STATE_WORKDIR", ".data/triage-state")
     _ensure_state_clone(work, args.branch)
     res = state.pull(
         data_dir=args.data_dir, work_dir=work, run_git=_run_git, branch=args.branch
     )
-    print(f"pulled: {res['files_updated']} files updated")
-    return 0
+    return out.emit(res, f"pulled: {res['files_updated']} files updated")
 
 
 def _cmd_state_push(args: argparse.Namespace) -> int:
     from . import state
 
+    out = args._out
     con = _open_db(args.db)
     repos = [r.full for r in config.load_repos(args.config)]
     work = os.environ.get("TRIAGE_VERSE_STATE_WORKDIR", ".data/triage-state")
@@ -288,10 +293,8 @@ def _cmd_state_push(args: argparse.Namespace) -> int:
         branch=args.branch,
         now=_state_now(),
     )
-    print(
-        f"push: {'committed' if res['pushed'] else 'no changes'} ({res['records']} records)"
-    )
-    return 0
+    human = f"push: {'committed' if res['pushed'] else 'no changes'} ({res['records']} records)"
+    return out.emit(res, human)
 
 
 def _cmd_undo(args: argparse.Namespace) -> int:
