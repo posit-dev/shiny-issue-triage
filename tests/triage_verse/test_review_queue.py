@@ -500,6 +500,55 @@ def test_fresh_decision_after_stale_result_hides_again(tmp_path):
     )
 
 
+def test_valid_module_id():
+    # Real proposal ids (uuid4().hex) and other namespace-safe strings.
+    assert review_queue.valid_module_id("a")
+    assert review_queue.valid_module_id("p1")
+    assert review_queue.valid_module_id("0f1e2d3c4b5a6978")
+    assert review_queue.valid_module_id("with_underscore")
+    assert review_queue.valid_module_id(".leading_dot")  # shiny permits this
+    # Anything outside shiny's ^\.?\w+$ is rejected.
+    assert not review_queue.valid_module_id("has-hyphen")
+    assert not review_queue.valid_module_id("has space")
+    assert not review_queue.valid_module_id("a.b")
+    assert not review_queue.valid_module_id("")
+    assert not review_queue.valid_module_id(None)
+    assert not review_queue.valid_module_id(123)
+
+
+def test_load_undecided_skips_invalid_module_ids(tmp_path):
+    proposals_dir = tmp_path / "proposals"
+    decisions_dir = tmp_path / "decisions"
+    _write_jsonl(
+        proposals_dir / "2026" / "W27.jsonl",
+        [
+            {
+                "id": "ok",
+                "repo": "r/r",
+                "issue": 1,
+                "action": "add-label",
+                "confidence": 0.9,
+            },
+            {
+                "id": "bad-hyphen",
+                "repo": "r/r",
+                "issue": 2,
+                "action": "add-label",
+                "confidence": 0.8,
+            },
+            {
+                # No id at all cannot be a module namespace either.
+                "repo": "r/r",
+                "issue": 3,
+                "action": "add-label",
+                "confidence": 0.7,
+            },
+        ],
+    )
+    rows = review_queue.load_undecided(proposals_dir, decisions_dir, _mirror(tmp_path))
+    assert [r["id"] for r in rows] == ["ok"]
+
+
 def test_clamp_index():
     assert review_queue.clamp_index(None, 0) is None
     assert review_queue.clamp_index(3, 0) is None
