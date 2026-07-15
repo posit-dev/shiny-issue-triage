@@ -1,8 +1,11 @@
 import json
 
-from triage_verse.cli import Output
+from triage_verse import analyze as analyze_mod
 from triage_verse import cli
 from triage_verse import sync as sync_mod
+from triage_verse import tier2
+from triage_verse import verify as verify_mod
+from triage_verse.cli import Output
 
 
 def test_emit_json_envelope_success(capsys):
@@ -15,7 +18,9 @@ def test_emit_json_envelope_success(capsys):
 
 
 def test_emit_human_prints_prose(capsys):
-    rc = Output("sync", json_mode=False).emit({"issues": 4}, human="synced 4", exit_code=0)
+    rc = Output("sync", json_mode=False).emit(
+        {"issues": 4}, human="synced 4", exit_code=0
+    )
     assert rc == 0
     out = capsys.readouterr()
     assert out.out.strip() == "synced 4"
@@ -69,9 +74,16 @@ def test_sync_json_envelope(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(
         sync_mod,
         "sync_all",
-        lambda con, repos, *, full, log: {"repos": 1, "issues": 2, "prs": 0, "comments": 3},
+        lambda con, repos, *, full, log: {
+            "repos": 1,
+            "issues": 2,
+            "prs": 0,
+            "comments": 3,
+        },
     )
-    rc = cli.main(["sync", "--json", "--db", str(tmp_path / "m.sqlite"), "--config", str(cfg)])
+    rc = cli.main(
+        ["sync", "--json", "--db", str(tmp_path / "m.sqlite"), "--config", str(cfg)]
+    )
     assert rc == 0
     doc = json.loads(capsys.readouterr().out)
     assert doc["command"] == "sync"
@@ -84,9 +96,16 @@ def test_json_flag_accepted_before_subcommand(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(
         sync_mod,
         "sync_all",
-        lambda con, repos, *, full, log: {"repos": 1, "issues": 0, "prs": 0, "comments": 0},
+        lambda con, repos, *, full, log: {
+            "repos": 1,
+            "issues": 0,
+            "prs": 0,
+            "comments": 0,
+        },
     )
-    rc = cli.main(["--json", "sync", "--db", str(tmp_path / "m.sqlite"), "--config", str(cfg)])
+    rc = cli.main(
+        ["--json", "sync", "--db", str(tmp_path / "m.sqlite"), "--config", str(cfg)]
+    )
     assert rc == 0
     doc = json.loads(capsys.readouterr().out)
     assert doc["ok"] is True and doc["command"] == "sync"
@@ -100,7 +119,9 @@ def test_sync_logs_go_to_stderr_in_json_mode(tmp_path, monkeypatch, capsys):
         return {"repos": 1, "issues": 0, "prs": 0, "comments": 0}
 
     monkeypatch.setattr(sync_mod, "sync_all", fake_sync_all)
-    cli.main(["sync", "--json", "--db", str(tmp_path / "m.sqlite"), "--config", str(cfg)])
+    cli.main(
+        ["sync", "--json", "--db", str(tmp_path / "m.sqlite"), "--config", str(cfg)]
+    )
     out = capsys.readouterr()
     assert "mirroring" in out.err
     json.loads(out.out)  # stdout is exactly the envelope, still parseable
@@ -109,7 +130,16 @@ def test_sync_logs_go_to_stderr_in_json_mode(tmp_path, monkeypatch, capsys):
 def test_sync_unknown_repo_json_error(tmp_path, capsys):
     cfg = _repos_cfg(tmp_path)
     rc = cli.main(
-        ["sync", "--json", "--db", str(tmp_path / "m.sqlite"), "--config", str(cfg), "--repo", "rstudio/nope"]
+        [
+            "sync",
+            "--json",
+            "--db",
+            str(tmp_path / "m.sqlite"),
+            "--config",
+            str(cfg),
+            "--repo",
+            "rstudio/nope",
+        ]
     )
     assert rc == 1
     doc = json.loads(capsys.readouterr().out)
@@ -123,10 +153,17 @@ def test_unexpected_exception_becomes_json_envelope(tmp_path, monkeypatch, capsy
         raise RuntimeError("network died")
 
     monkeypatch.setattr(sync_mod, "sync_all", boom)
-    rc = cli.main(["sync", "--json", "--db", str(tmp_path / "m.sqlite"), "--config", str(cfg)])
+    rc = cli.main(
+        ["sync", "--json", "--db", str(tmp_path / "m.sqlite"), "--config", str(cfg)]
+    )
     assert rc == 1
     doc = json.loads(capsys.readouterr().out)
-    assert doc == {"command": "sync", "ok": False, "exit_code": 1, "error": "network died"}
+    assert doc == {
+        "command": "sync",
+        "ok": False,
+        "exit_code": 1,
+        "error": "network died",
+    }
 
 
 def test_unexpected_exception_reraises_in_human_mode(tmp_path, monkeypatch):
@@ -142,10 +179,6 @@ def test_unexpected_exception_reraises_in_human_mode(tmp_path, monkeypatch):
         cli.main(["sync", "--db", str(tmp_path / "m.sqlite"), "--config", str(cfg)])
 
 
-from triage_verse import verify as verify_mod
-from triage_verse import analyze as analyze_mod
-
-
 def test_verify_counts_mismatch_is_ok_true_exit_1(tmp_path, monkeypatch, capsys):
     cfg = _repos_cfg(tmp_path)
     monkeypatch.setattr(
@@ -155,7 +188,16 @@ def test_verify_counts_mismatch_is_ok_true_exit_1(tmp_path, monkeypatch, capsys)
             {"repo": "rstudio/shiny", "mirror": 10, "github": 12, "ok": False}
         ],
     )
-    rc = cli.main(["verify-counts", "--json", "--db", str(tmp_path / "m.sqlite"), "--config", str(cfg)])
+    rc = cli.main(
+        [
+            "verify-counts",
+            "--json",
+            "--db",
+            str(tmp_path / "m.sqlite"),
+            "--config",
+            str(cfg),
+        ]
+    )
     assert rc == 1
     doc = json.loads(capsys.readouterr().out)
     assert doc["ok"] is True
@@ -173,7 +215,16 @@ def test_verify_counts_all_ok_exit_0(tmp_path, monkeypatch, capsys):
             {"repo": "rstudio/shiny", "mirror": 10, "github": 10, "ok": True}
         ],
     )
-    rc = cli.main(["verify-counts", "--json", "--db", str(tmp_path / "m.sqlite"), "--config", str(cfg)])
+    rc = cli.main(
+        [
+            "verify-counts",
+            "--json",
+            "--db",
+            str(tmp_path / "m.sqlite"),
+            "--config",
+            str(cfg),
+        ]
+    )
     assert rc == 0
     assert json.loads(capsys.readouterr().out)["data"]["reconciled"] is True
 
@@ -190,12 +241,7 @@ def test_analyze_status_json(tmp_path, monkeypatch, capsys):
     assert doc["data"] == {"open_batches": [], "today_spend_usd": 1.25}
 
 
-from triage_verse import embed as embed_mod
-
-
 def test_tier2_json(tmp_path, monkeypatch, capsys):
-    from triage_verse import tier2, gh
-
     monkeypatch.setattr(tier2, "request_fix", lambda repo, number, *, run_gh: None)
     rc = cli.main(["tier2", "--json", "rstudio/shiny#7"])
     assert rc == 0
