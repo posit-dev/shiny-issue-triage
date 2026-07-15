@@ -399,3 +399,55 @@ def test_autonomy_status_json_empty(tmp_path, monkeypatch, capsys):
     doc = json.loads(capsys.readouterr().out)
     assert doc["command"] == "autonomy status"
     assert doc["data"] == {"categories": {}, "wrote": None}
+
+
+def test_proposals_prune_json_envelope(tmp_path, capsys):
+    f = tmp_path / "proposals" / "2026" / "W27.jsonl"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(
+        json.dumps(
+            {"id": "bad-hyphen", "repo": "r/r", "issue": 1, "action": "add-label"}
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    rc = cli.main(
+        [
+            "proposals",
+            "prune",
+            "--json",
+            "bad-hyphen",
+            "--proposals-dir",
+            str(tmp_path / "proposals"),
+        ]
+    )
+    assert rc == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["command"] == "proposals prune"
+    assert doc["ok"] is True
+    assert doc["data"]["removed"] == 1
+    assert doc["data"]["matches"][0]["id"] == "bad-hyphen"
+
+
+def test_proposals_prune_valid_id_json_error(tmp_path, capsys):
+    f = tmp_path / "proposals" / "2026" / "W27.jsonl"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(
+        json.dumps({"id": "keepme", "repo": "r/r", "issue": 2, "action": "add-label"})
+        + "\n",
+        encoding="utf-8",
+    )
+    rc = cli.main(
+        [
+            "proposals",
+            "prune",
+            "--json",
+            "keepme",
+            "--proposals-dir",
+            str(tmp_path / "proposals"),
+        ]
+    )
+    assert rc == 1
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["ok"] is False
+    assert "valid module id" in doc["error"]

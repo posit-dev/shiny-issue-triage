@@ -245,6 +245,7 @@ def _cmd_execute(args: argparse.Namespace) -> int:
 
 
 def _cmd_proposals_prune(args: argparse.Namespace) -> int:
+    out = args._out
     proposals_dir = _env_default(
         args.proposals_dir, "TRIAGE_VERSE_PROPOSALS", DEFAULT_PROPOSALS
     )
@@ -253,21 +254,35 @@ def _cmd_proposals_prune(args: argparse.Namespace) -> int:
             proposals_dir, args.target, apply=args.apply
         )
     except ValueError as exc:
-        print(exc)
-        return 1
-    for m in matches:
-        rec = m["record"]
-        print(
-            f"  {m['file']}:{m['line']}  "
-            f"{rec.get('repo')}#{rec.get('issue')}  id={rec.get('id')!r}"
-        )
+        return out.fail(str(exc))
+    lines = [
+        f"  {m['file']}:{m['line']}  "
+        f"{m['record'].get('repo')}#{m['record'].get('issue')}  "
+        f"id={m['record'].get('id')!r}"
+        for m in matches
+    ]
     verb = "Removed" if args.apply else "Would remove"
-    print(f"{verb} {len(matches)} proposal record(s).")
-    print(
+    lines.append(f"{verb} {len(matches)} proposal record(s).")
+    lines.append(
         "GitHub is the source of truth. Re-run `triage-verse analyze` to "
         "regenerate valid proposals for these issues."
     )
-    return 0
+    data = {
+        "target": args.target,
+        "apply": args.apply,
+        "removed": len(matches),
+        "matches": [
+            {
+                "file": m["file"],
+                "line": m["line"],
+                "repo": m["record"].get("repo"),
+                "issue": m["record"].get("issue"),
+                "id": m["record"].get("id"),
+            }
+            for m in matches
+        ],
+    }
+    return out.emit(data, "\n".join(lines))
 
 
 def _run_git(args, *, cwd=None):
@@ -692,11 +707,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_auto_st.set_defaults(func=_cmd_autonomy_status, cmdname="autonomy status")
 
-    p_prop = sub.add_parser("proposals", help="maintain the proposal log")
+    p_prop = sub.add_parser(
+        "proposals", help="maintain the proposal log", parents=[common]
+    )
     prop_sub = p_prop.add_subparsers(dest="proposals_command", required=True)
     p_prune = prop_sub.add_parser(
         "prune",
         help="remove proposal records with an invalid Shiny module id",
+        parents=[common],
     )
     p_prune.add_argument(
         "target", help="a proposal id, or a path to a proposals .jsonl file"
@@ -705,7 +723,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_prune.add_argument(
         "--apply", action="store_true", help="rewrite files (default: dry run)"
     )
-    p_prune.set_defaults(func=_cmd_proposals_prune)
+    p_prune.set_defaults(func=_cmd_proposals_prune, cmdname="proposals prune")
 
     return parser
 
