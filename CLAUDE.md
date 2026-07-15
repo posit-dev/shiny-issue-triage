@@ -39,6 +39,19 @@ Launch the Shiny review app: `shiny run src/triage_verse/review_app/app.py`
 The CLI is `uv run triage-verse <subcommand>`; the `README.md` walks the whole
 pipeline with copy-pasteable invocations.
 
+**When driving the CLI programmatically (scripts, dashboards, or agents —
+including you), pass the global `--json` flag rather than parsing prose.** It
+works in either position (`triage-verse --json sync` or `triage-verse sync
+--json`) on every command. Each invocation then emits a single JSON envelope on
+stdout — `{"command", "ok", "exit_code", "data"}` on success, or
+`{"command", "ok": false, "exit_code", "error"}` on failure — while all
+human/progress logging goes to stderr. `ok` reports whether the command *ran*;
+a command that ran fine but found a negative result (e.g. `verify-counts` saw a
+mismatch) is still `ok: true` with a non-zero `exit_code`, so branch on
+`exit_code` for shell control flow and read `data` for the outcome. Any new CLI
+subcommand must route its output through `cli.py`'s `Output` helper so it
+participates in this envelope.
+
 ## Architecture
 
 The `triage-verse` pipeline is a chain of stages that each read and write a
