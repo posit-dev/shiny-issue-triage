@@ -396,6 +396,7 @@ def _cmd_steady_state(args: argparse.Namespace) -> int:
     con = _open_db(args.db)
     repos = [r.full for r in config.load_repos(args.config)]
     work = os.environ.get("TRIAGE_VERSE_STATE_WORKDIR", ".data/triage-state")
+    out = args._out
 
     def _pull():
         _ensure_state_clone(work, args.branch)
@@ -404,7 +405,7 @@ def _cmd_steady_state(args: argparse.Namespace) -> int:
         )
 
     def _sync():
-        sync_mod.sync_all(con, repos, full=False, log=print)
+        sync_mod.sync_all(con, repos, full=False, log=out.log)
 
     def _analyze():
         _run_analyze(args)
@@ -419,7 +420,7 @@ def _cmd_steady_state(args: argparse.Namespace) -> int:
                 cfg=config.load_models_config(args.models_config),
                 proposals_dir=args.proposals_dir,
                 run_gh=gh.run_gh,
-                log=print,
+                log=out.log,
             )
 
     def _push():
@@ -436,7 +437,6 @@ def _cmd_steady_state(args: argparse.Namespace) -> int:
     def _snapshot():
         snapshot_mod.publish(args.db, dated=False)
 
-    out = args._out
     stages = [
         ("state-pull", _pull),
         ("sync", _sync),
@@ -449,7 +449,7 @@ def _cmd_steady_state(args: argparse.Namespace) -> int:
         names = [name for name, _ in stages]
         human = "\n".join(f"would run: {name}" for name in names)
         return out.emit({"stages": names, "dry_run": True}, human)
-    res = steady_state.run(stages)
+    res = steady_state.run(stages, log=out.log)
     human = f"steady-state: completed={res['completed']} failed={res['failed']}"
     return out.emit(res, human, exit_code=1 if res["failed"] else 0)
 

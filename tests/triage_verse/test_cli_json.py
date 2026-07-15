@@ -329,6 +329,56 @@ def test_steady_state_dry_run_json(tmp_path, monkeypatch, capsys):
     assert "state-pull" in doc["data"]["stages"]
 
 
+def test_steady_state_json_logs_routed_to_stderr(tmp_path, monkeypatch, capsys):
+    """Regression: stage closures must use out.log, not print, so --json stdout stays pure."""
+    from triage_verse import state
+
+    cfg = _repos_cfg(tmp_path)
+
+    # Patch _ensure_state_clone to no-op
+    monkeypatch.setattr(cli, "_ensure_state_clone", lambda work_dir, branch: None)
+
+    # Patch state.pull / state.push to no-op
+    monkeypatch.setattr(state, "pull", lambda **kw: {})
+    monkeypatch.setattr(state, "push", lambda *a, **kw: {})
+
+    # Patch sync_all to log something, proving logs go to stderr not stdout
+    def fake_sync(con, repos, *, full, log):
+        log("mirroring progress")
+        return {"repos": 1, "issues": 0, "prs": 0, "comments": 0}
+
+    monkeypatch.setattr(sync_mod, "sync_all", fake_sync)
+
+    # Patch _run_analyze to no-op (avoids needing embedder/model config)
+    monkeypatch.setattr(cli, "_run_analyze", lambda args: {})
+
+    # Patch snapshot publish to no-op
+    monkeypatch.setattr(snapshot_mod, "publish", lambda db, *, dated: None)
+
+    # Use --no-tier1 to skip tier1 entirely
+    rc = cli.main(
+        [
+            "steady-state",
+            "--json",
+            "--no-tier1",
+            "--db",
+            str(tmp_path / "m.sqlite"),
+            "--config",
+            str(cfg),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    # stdout must be exactly one valid JSON envelope
+    doc = json.loads(captured.out)
+    assert doc["command"] == "steady-state"
+    assert doc["ok"] is True
+    assert rc == 0
+    # The logged message must appear in stderr, not stdout
+    assert "mirroring progress" in captured.err
+    assert "mirroring progress" not in captured.out
+
+
 def test_autonomy_status_json_empty(tmp_path, monkeypatch, capsys):
     from triage_verse import autonomy, review_queue
 
