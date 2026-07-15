@@ -75,27 +75,47 @@ gh_mutation(operation: str, query: str, variables: dict, *, repos: list[str]) ->
 ```
 
 builds the GraphQL payload and calls `run_gh(["api", "graphql", ...])`, passing
-the caller-declared target `repos` through to the guard (see "How the declared
-repos reach the guard"). `operation` is the human-readable operation name used
-in log lines; `repos` is the list of repositories the mutation targets.
+the caller-declared `operation` name and target `repos` through to the guard
+(see "How the declared operation and repos reach the guard"). `operation` is our
+own readable operation name — it is the policy unit the guard checks, and it
+appears in log lines; `repos` is the list of repositories the mutation targets.
+
+**Operation names vs GraphQL fields.** We name operations *ourselves*, at the
+issue/PR granularity we want to reason about, and each operation compiles to a
+GitHub GraphQL mutation field. This matters for labels: GitHub's schema calls
+the label mutations `addLabelsToLabelable` / `removeLabelsFromLabelable` —
+generic fields shared by *both* issues and pull requests (a "Labelable" is
+anything labelable). So `addLabelsToIssue` and `addLabelsToPR` both compile to
+the same `addLabelsToLabelable` field on the wire; the issue-vs-PR distinction
+lives only in our operation name, not in the query. Keeping our own operation
+layer lets the guard allow issue-labeling while independently denying
+PR-labeling even though the underlying field is identical.
 
 `executor.py`'s `_apply_mutation` and `_apply_reverse` are rewritten from their
-current porcelain + REST forms to GraphQL mutations:
+current porcelain + REST forms to these operations:
 
-| Write | GraphQL mutation field |
-| --- | --- |
-| add-label | `addLabelsToLabelable` |
-| remove-label | `removeLabelsFromLabelable` |
-| comment | `addComment` |
-| close (completed / not-planned) | `closeIssue` (`stateReason: COMPLETED` / `NOT_PLANNED`) |
-| close-duplicate | `closeIssue` (`stateReason: DUPLICATE`, `duplicateIssueId:`) |
-| reopen | `reopenIssue` |
-| delete-comment (undo) | `deleteIssueComment` |
+| Write | Operation name | GraphQL mutation field |
+| --- | --- | --- |
+| add-label | `addLabelsToIssue` | `addLabelsToLabelable` |
+| remove-label | `removeLabelsFromIssue` | `removeLabelsFromLabelable` |
+| comment | `addComment` | `addComment` |
+| close (completed / not-planned) | `closeIssue` | `closeIssue` (`stateReason: COMPLETED` / `NOT_PLANNED`) |
+| close-duplicate | `closeIssue` | `closeIssue` (`stateReason: DUPLICATE`, `duplicateIssueId:`) |
+| reopen | `reopenIssue` | `reopenIssue` |
+| delete-comment (undo) | `deleteIssueComment` | `deleteIssueComment` |
 
 `tier2.request_fix` and `reprex.request_reprex` — which today add a label via
-`issue edit --add-label` — are migrated to the same helper
-(`addLabelsToLabelable`). After this change there is exactly one write shape in
-the codebase.
+`issue edit --add-label` — are migrated to the same helper (operation
+`addLabelsToIssue`). After this change there is exactly one write shape in the
+codebase.
+
+**Reserved for later — PR labeling.** Nothing in the codebase labels pull
+requests today, so no PR operation is wired up yet. When the apply stage begins
+touching PRs, it will add operations `addLabelsToPR` / `removeLabelsFromPR` to
+the operation allowlist; both compile to the same `addLabelsToLabelable` /
+`removeLabelsFromLabelable` fields (differing only in the labelable node ID they
+target). They are named now so the operation allowlist has room for them without
+a redesign.
 
 **Node IDs.** GraphQL mutations operate on node IDs, not `owner/repo/number`
 tuples:
@@ -123,14 +143,23 @@ everything else.
 - Read-only porcelain the codebase actually uses (e.g. `repo view`,
   `release view`, `release list`).
 
-**Allowed — guarded mutation.** `api graphql` whose body contains a `mutation`:
+**Allowed — guarded mutation.** `api graphql` whose body contains a `mutation`.
+Two independent checks, both must pass (defense in depth):
 
-- Parse **every** top-level mutation field from the query string (the query is
-  one we construct, so the field names are reliably present as literal text).
-- **Every** parsed field must be in `ALLOWED_MUTATIONS`. Any unrecognized field
-  → refuse.
-- The caller-declared `repos` must be non-empty and every entry must be in the
-  active-repo allowlist (see "Repo scoping"). Otherwise → refuse.
+- **Operation-name check (policy unit).** The caller-declared `operation` must
+  be in `ALLOWED_OPERATIONS` — our readable names (`addLabelsToIssue`,
+  `removeLabelsFromIssue`, `addComment`, `closeIssue`, `reopenIssue`,
+  `deleteIssueComment`; PR variants reserved). This is where issue-vs-PR
+  granularity is enforced. A missing or unrecognized operation → refuse.
+- **Wire-field check (fail-closed backstop).** Parse **every** top-level
+  mutation field from the query string (the query is one we construct, so the
+  field names are reliably present as literal text) and require **every** field
+  to be in `ALLOWED_MUTATION_FIELDS` — the real GraphQL field names
+  (`addLabelsToLabelable`, `removeLabelsFromLabelable`, `addComment`,
+  `closeIssue`, `reopenIssue`, `deleteIssueComment`). Any unrecognized field →
+  refuse. This catches a mutation whose declared operation lies about its body.
+- **Repo check.** The caller-declared `repos` must be non-empty and every entry
+  must be in the active-repo allowlist (see "Repo scoping"). Otherwise → refuse.
 
 **Allowed — trusted infra.** `release create` / `release upload` /
 `release delete` are the state-bus snapshot mechanism (`snapshot.py`): they
@@ -165,23 +194,24 @@ things bound that trust:
 
 - The single choke point — `gh_mutation` is the only way to emit a mutation the
   guard will allow, and it *requires* a non-empty `repos` argument.
-- The mutation-field allowlist — even a mis-declared call can only invoke one of
-  six known issue-mutation fields, never an org-, user-, or repo-scoped
-  destructive operation.
+- The wire-field allowlist — even a mis-declared call can only invoke one of the
+  known issue-mutation fields, never an org-, user-, or repo-scoped destructive
+  operation.
 
 Applying kata's canonicalization lesson: both the declared repos and the
 `repos.yaml` entries are canonicalized (trimmed, case-folded `owner/name`)
 before comparison, so a casing or whitespace difference cannot cause a
 false match *or* a false refusal.
 
-### How the declared repos reach the guard
+### How the declared operation and repos reach the guard
 
-`run_gh` gains an optional keyword argument carrying the declared target repos
-(populated only by `gh_mutation`). The active-repo allowlist is loaded via
-`config.load_repos("config/repos.yaml")` and cached in the guard. `ALLOWED_MUTATIONS`
-and the hub-repo identity are constants/config in `gh.py`. No call site other
-than `gh_mutation` sets the declared-repos argument, so no call site can talk
-its way past the mutation branch of the classifier.
+`run_gh` gains optional keyword arguments carrying the declared `operation` name
+and target repos (populated only by `gh_mutation`). The active-repo allowlist is
+loaded via `config.load_repos("config/repos.yaml")` and cached in the guard.
+`ALLOWED_OPERATIONS`, `ALLOWED_MUTATION_FIELDS`, and the hub-repo identity are
+constants/config in `gh.py`. No call site other than `gh_mutation` sets the
+declared-operation/declared-repos arguments, so no call site can talk its way
+past the mutation branch of the classifier.
 
 ## Components and boundaries
 
@@ -190,8 +220,8 @@ its way past the mutation branch of the classifier.
   `config.load_repos`.
 - **`executor.py`** — constructs GraphQL mutations for each decision/undo and
   dispatches them via `gh_mutation`. No longer builds porcelain/REST writes.
-- **`tier2.py` / `reprex.py`** — build a single `addLabelsToLabelable` mutation
-  via `gh_mutation`.
+- **`tier2.py` / `reprex.py`** — add a label via `gh_mutation` with operation
+  `addLabelsToIssue`.
 - **`snapshot.py`** — unchanged in behavior; its `release` writes are recognized
   by the guard's trusted-infra category.
 - **`sync.py`, `verify.py`, other readers** — unchanged; their reads pass the
@@ -217,9 +247,12 @@ Unit tests (pytest), driven at the `gh.py` seam:
   read → allow; `repo view` / `release view` → allow; `release create/upload/delete`
   → allow (trusted infra); porcelain `issue edit`/`close`/`reopen` → refuse;
   `api -X POST` / body-flag on non-graphql path → refuse; unknown shape → refuse.
-- **Mutation-field parser** — single field allowed; multiple fields all allowed;
-  a field not in `ALLOWED_MUTATIONS` → refuse; an aliased/unknown field mixed
-  with an allowed one → refuse (all fields must pass).
+- **Operation-name check** — declared operation in `ALLOWED_OPERATIONS` → allow;
+  missing or unknown operation → refuse; a reserved-but-unwired PR operation is
+  handled per whether it has been added to the allowlist.
+- **Wire-field parser** — single field allowed; multiple fields all allowed; a
+  field not in `ALLOWED_MUTATION_FIELDS` → refuse; an aliased/unknown field
+  mixed with an allowed one → refuse (all fields must pass).
 - **Repo check** — declared repo in `repos.yaml` → allow; not in `repos.yaml` →
   refuse; empty declared repos → refuse; casing/whitespace canonicalization
   matches correctly.
