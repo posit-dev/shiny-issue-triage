@@ -140,3 +140,51 @@ def test_unexpected_exception_reraises_in_human_mode(tmp_path, monkeypatch):
     monkeypatch.setattr(sync_mod, "sync_all", boom)
     with pytest.raises(RuntimeError, match="network died"):
         cli.main(["sync", "--db", str(tmp_path / "m.sqlite"), "--config", str(cfg)])
+
+
+from triage_verse import verify as verify_mod
+from triage_verse import analyze as analyze_mod
+
+
+def test_verify_counts_mismatch_is_ok_true_exit_1(tmp_path, monkeypatch, capsys):
+    cfg = _repos_cfg(tmp_path)
+    monkeypatch.setattr(
+        verify_mod,
+        "verify_counts",
+        lambda con, repos, *, tolerance: [
+            {"repo": "rstudio/shiny", "mirror": 10, "github": 12, "ok": False}
+        ],
+    )
+    rc = cli.main(["verify-counts", "--json", "--db", str(tmp_path / "m.sqlite"), "--config", str(cfg)])
+    assert rc == 1
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["ok"] is True
+    assert doc["exit_code"] == 1
+    assert doc["data"]["reconciled"] is False
+    assert doc["data"]["repos"][0]["diff"] == 2
+
+
+def test_verify_counts_all_ok_exit_0(tmp_path, monkeypatch, capsys):
+    cfg = _repos_cfg(tmp_path)
+    monkeypatch.setattr(
+        verify_mod,
+        "verify_counts",
+        lambda con, repos, *, tolerance: [
+            {"repo": "rstudio/shiny", "mirror": 10, "github": 10, "ok": True}
+        ],
+    )
+    rc = cli.main(["verify-counts", "--json", "--db", str(tmp_path / "m.sqlite"), "--config", str(cfg)])
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out)["data"]["reconciled"] is True
+
+
+def test_analyze_status_json(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(
+        analyze_mod,
+        "analyze_status",
+        lambda con: {"open_batches": [], "today_spend_usd": 1.25},
+    )
+    rc = cli.main(["analyze-status", "--json", "--db", str(tmp_path / "m.sqlite")])
+    assert rc == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["data"] == {"open_batches": [], "today_spend_usd": 1.25}

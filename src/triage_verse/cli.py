@@ -118,19 +118,33 @@ def _cmd_analytics_export(args: argparse.Namespace) -> int:
 
 
 def _cmd_verify_counts(args: argparse.Namespace) -> int:
+    out = args._out
     repos = [r.full for r in config.load_repos(args.config)]
     con = _open_db(args.db)
     results = verify_mod.verify_counts(con, repos, tolerance=args.tolerance)
-    bad = [r for r in results if not r["ok"]]
-    for r in results:
-        flag = "OK " if r["ok"] else "MISMATCH"
-        diff = r["github"] - r["mirror"]
-        print(
-            f"{flag} {r['repo']}: mirror={r['mirror']} "
-            f"github={r['github']} diff={diff:+d}"
-        )
-    print(f"{len(results) - len(bad)}/{len(results)} repos reconcile")
-    return 1 if bad else 0
+    rows = [
+        {
+            "repo": r["repo"],
+            "mirror": r["mirror"],
+            "github": r["github"],
+            "diff": r["github"] - r["mirror"],
+            "ok": r["ok"],
+        }
+        for r in results
+    ]
+    bad = [r for r in rows if not r["ok"]]
+    lines = [
+        f"{'OK ' if r['ok'] else 'MISMATCH'} {r['repo']}: mirror={r['mirror']} "
+        f"github={r['github']} diff={r['diff']:+d}"
+        for r in rows
+    ]
+    lines.append(f"{len(rows) - len(bad)}/{len(rows)} repos reconcile")
+    data = {
+        "reconciled": not bad,
+        "tolerance": args.tolerance,
+        "repos": rows,
+    }
+    return out.emit(data, "\n".join(lines), exit_code=1 if bad else 0)
 
 
 def _cmd_embed(args: argparse.Namespace) -> int:
@@ -176,15 +190,15 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
 
 
 def _cmd_analyze_status(args: argparse.Namespace) -> int:
+    out = args._out
     con = _open_db(args.db)
     status = analyze_mod.analyze_status(con)
-    print(
+    lines = [
         f"open batches: {len(status['open_batches'])}; "
         f"today spend: ${status['today_spend_usd']:.4f}"
-    )
-    for b in status["open_batches"]:
-        print(f"  {b['batch_id']} [{b['stage']}] {b['status']}")
-    return 0
+    ]
+    lines += [f"  {b['batch_id']} [{b['stage']}] {b['status']}" for b in status["open_batches"]]
+    return out.emit(status, "\n".join(lines))
 
 
 def _cmd_execute(args: argparse.Namespace) -> int:
