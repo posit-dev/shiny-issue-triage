@@ -33,6 +33,21 @@ KEY_ACTIONS = {
 }
 
 
+# A proposal's `id` is used verbatim as a Shiny dynamic-module namespace in the
+# review app (`row_ui`/`row_server`). Shiny's `validate_id` only accepts ids
+# matching `^\.?\w+$`, and raises `ValueError` at render time otherwise -- which,
+# because the whole queue renders in one output, would blank every row, not just
+# the offending one. Real ids are `uuid4().hex` (always safe), so we simply drop
+# any id that isn't (with a warning) rather than let one bad row take down the
+# queue. Kept in sync with shiny._namespaces.re_valid_id.
+_VALID_MODULE_ID = re.compile(r"\.?\w+")
+
+
+def valid_module_id(id: object) -> bool:
+    """True if `id` is usable as a Shiny module namespace (see `_VALID_MODULE_ID`)."""
+    return isinstance(id, str) and _VALID_MODULE_ID.fullmatch(id) is not None
+
+
 def clamp_index(index: int | None, length: int) -> int | None:
     """Clamp a selection index to a queue of `length`; None means no selection."""
     if length <= 0:
@@ -117,6 +132,17 @@ def load_undecided(
     proposals = []
     for r in iter_jsonl_records(proposals_dir):
         pid = r.get("id")
+        if not valid_module_id(pid):
+            logger.warning(
+                "skipping proposal %r (%s#%s): invalid Shiny module id. "
+                "Remove it with 'triage-verse proposals prune %s' (or pass its "
+                ".jsonl file), then re-run 'triage-verse analyze'.",
+                pid,
+                r.get("repo"),
+                r.get("issue"),
+                pid,
+            )
+            continue
         if (
             pid in terminal_ids
             or r.get("action") not in SUPPORTED_ACTIONS

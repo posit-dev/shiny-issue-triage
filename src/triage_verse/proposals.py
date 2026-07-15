@@ -102,3 +102,69 @@ def write(
     records: list[dict], base_dir: str | pathlib.Path, *, today: str | None = None
 ) -> pathlib.Path:
     return jsonl_log.append_weekly(records, base_dir, today=today)
+
+
+def prune_proposals(
+    proposals_dir: str | pathlib.Path,
+    target: str,
+    *,
+    apply: bool = False,
+) -> list[dict]:
+    """Remove proposal records with an invalid Shiny module id.
+
+    `target` is either a proposal id or a path to a proposals ``.jsonl`` file:
+
+    - if it names an existing file, remove every record *in that file* whose
+      ``id`` is not a valid module id (this also catches missing/empty ids);
+    - otherwise treat it as a proposal id and remove the record(s) with that
+      exact id -- refusing (``ValueError``) if the id is itself a valid module
+      id, so a well-formed proposal can never be deleted this way.
+
+    Real ids are ``uuid4().hex`` and always valid; an invalid one only comes
+    from a hand-edited record. Deleting it and re-running ``analyze`` mints a
+    fresh valid id (GitHub is the source of truth).
+
+    Returns one match dict ``{"file", "line", "record"}`` per removed record
+    (or, when ``apply`` is False, per record that *would* be removed). Files are
+    rewritten line-for-line, dropping only matched lines; every other line --
+    including blank and malformed-JSON lines -- is preserved verbatim.
+    """
+    from . import review_queue
+
+    target_path = pathlib.Path(target)
+    file_mode = target_path.is_file()
+    if not file_mode and review_queue.valid_module_id(target):
+        raise ValueError(f"'{target}' is a valid module id; nothing to prune")
+
+    if file_mode:
+        files = [target_path]
+    else:
+        base = pathlib.Path(proposals_dir)
+        files = sorted(base.glob("**/*.jsonl")) if base.exists() else []
+
+    def _should_remove(rec: dict) -> bool:
+        if file_mode:
+            return not review_queue.valid_module_id(rec.get("id"))
+        return rec.get("id") == target
+
+    removed: list[dict] = []
+    for path in files:
+        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+        kept: list[str] = []
+        changed = False
+        for lineno, line in enumerate(lines, start=1):
+            stripped = line.strip()
+            rec = None
+            if stripped:
+                try:
+                    rec = json.loads(stripped)
+                except json.JSONDecodeError:
+                    rec = None
+            if isinstance(rec, dict) and _should_remove(rec):
+                removed.append({"file": str(path), "line": lineno, "record": rec})
+                changed = True
+                continue
+            kept.append(line)
+        if apply and changed:
+            path.write_text("".join(kept), encoding="utf-8")
+    return removed
