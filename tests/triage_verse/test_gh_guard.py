@@ -4,7 +4,7 @@ import subprocess
 
 import pytest
 
-from triage_verse import gh
+from triage_verse import executor, gh
 
 ALLOWED = frozenset({"o/r", "posit-dev/py-shiny"})
 
@@ -223,3 +223,56 @@ def test_gh_mutation_validates_and_dispatches(monkeypatch):
 def test_gh_mutation_refuses_unknown_operation():
     with pytest.raises(gh.EgressRefused, match="operation"):
         gh.gh_mutation("deleteRepository", "mutation { x }", {}, repos=["o/r"])
+
+
+# --- release download allowed ------------------------------------------------
+def test_release_download_allowed():
+    _classify(
+        [
+            "release",
+            "download",
+            "mirror-latest",
+            "--pattern",
+            "m.zst",
+            "--output",
+            "/tmp/m.zst",
+        ]
+    )
+
+
+# --- executor query constants pass the real guard ----------------------------
+
+
+def _payload_for(query):
+    return json.dumps({"query": query, "variables": {}})
+
+
+# (query constant, operation name) pairs the executor actually dispatches.
+_EXECUTOR_MUTATIONS = [
+    (executor._ADD_LABELS, "addLabelsToIssue"),
+    (executor._REMOVE_LABELS, "removeLabelsFromIssue"),
+    (executor._ADD_COMMENT, "addComment"),
+    (executor._CLOSE_ISSUE, "closeIssue"),
+    (executor._CLOSE_DUPLICATE, "closeIssue"),
+    (executor._REOPEN_ISSUE, "reopenIssue"),
+    (executor._DELETE_COMMENT, "deleteIssueComment"),
+]
+
+
+@pytest.mark.parametrize("query,operation", _EXECUTOR_MUTATIONS)
+def test_executor_query_constants_pass_real_guard(query, operation):
+    # Accepted with an allowed repo...
+    _classify(
+        ["api", "graphql", "--input", "-"],
+        input=_payload_for(query),
+        operation=operation,
+        repos=["o/r"],
+    )
+    # ...and refused when the declared repo is not in the allowlist.
+    with pytest.raises(gh.EgressRefused):
+        _classify(
+            ["api", "graphql", "--input", "-"],
+            input=_payload_for(query),
+            operation=operation,
+            repos=["evil/repo"],
+        )

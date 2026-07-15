@@ -64,7 +64,9 @@ _BODY_FLAGS = frozenset({"-f", "-F", "--field", "--raw-field", "--input"})
 _READ_ONLY_PORCELAIN = {"repo": frozenset({"view"})}
 # Trusted-infra writes: snapshot's state-bus releases on the hub repo. Bounded
 # to the ambient checkout by refusing any explicit --repo redirection.
-_TRUSTED_INFRA = {"release": frozenset({"view", "list", "create", "upload", "delete"})}
+_TRUSTED_INFRA = {
+    "release": frozenset({"view", "list", "download", "create", "upload", "delete"})
+}
 
 
 def _canon(repo: str) -> str:
