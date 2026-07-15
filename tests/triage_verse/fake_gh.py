@@ -1,4 +1,4 @@
-"""Stateful in-memory fake for gh.run_gh, covering the executor's call surface."""
+"""Stateful in-memory fake for gh.run_gh: all writes are GraphQL mutations."""
 
 from __future__ import annotations
 
@@ -13,50 +13,32 @@ class FakeGh:
         # Each issue dict: labels (list[str]), state ("open"/"closed"),
         # state_reason (str|None), updated_at (str), node_id (str).
         self.issues = {k: dict(v) for k, v in issues.items()}
-        self.comments: dict[int, dict] = {}  # comment id -> {repo, number, body}
+        self.comments: dict[int, dict] = {}  # databaseId -> {repo, number, body}
         self._next_comment_id = 1000
         self.mutating_calls: list[list[str]] = []
 
-    def __call__(self, args: list[str], **kwargs) -> str:
-        if args[0] == "api":
-            return self._api(args)
-        if args[0] == "issue":
-            return self._issue_cmd(args)
-        raise AssertionError(f"unexpected gh args: {args}")
-
-    # -- helpers ---------------------------------------------------------
-
-    def _find(self, repo: str, number: int) -> dict:
-        return self.issues[(repo, number)]
-
-    def _api(self, args: list[str]) -> str:
+    def __call__(self, args: list[str], *, input=None, **kwargs) -> str:
+        if args[0] != "api":
+            raise AssertionError(f"unexpected gh args: {args}")
         if args[1] == "graphql":
-            return self._graphql(args)
-        if "-X" in args and "DELETE" in args:
-            path = args[-1]
-            m = re.match(r"repos/([\w.-]+/[\w.-]+)/issues/comments/(\d+)$", path)
-            assert m, path
-            self.mutating_calls.append(args)
-            del self.comments[int(m.group(2))]
-            return ""
+            return self._graphql(input)
+        return self._rest_read(args)
+
+    # -- reads -----------------------------------------------------------
+
+    def _rest_read(self, args: list[str]) -> str:
         path = args[1]
-        m = re.match(r"repos/([\w.-]+/[\w.-]+)/issues/(\d+)/comments$", path)
-        if m:  # POST comment: gh api repos/.../comments -f body=...
-            self.mutating_calls.append(args)
-            body = next(a[len("body=") :] for a in args if a.startswith("body="))
-            cid = self._next_comment_id
-            self._next_comment_id += 1
-            self.comments[cid] = {
-                "repo": m.group(1),
-                "number": int(m.group(2)),
-                "body": body,
-            }
-            issue = self._find(m.group(1), int(m.group(2)))
-            issue["updated_at"] = issue["updated_at"] + "+c"
-            return json.dumps({"id": cid})
+        m = re.match(r"repos/([\w.-]+/[\w.-]+)/labels/(.+)$", path)
+        if m:  # label node-id resolution
+            from urllib.parse import unquote
+
+            return json.dumps({"node_id": f"L:{m.group(1)}:{unquote(m.group(2))}"})
+        m = re.match(r"repos/([\w.-]+/[\w.-]+)/issues/comments/(\d+)$", path)
+        if m:  # comment node-id resolution
+            return json.dumps({"node_id": f"C:{m.group(2)}"})
         m = re.match(r"repos/([\w.-]+/[\w.-]+)/issues/(\d+)$", path)
         assert m, path
-        issue = self._find(m.group(1), int(m.group(2)))
+        issue = self.issues[(m.group(1), int(m.group(2)))]
         return json.dumps(
             {
                 "updated_at": issue["updated_at"],
@@ -67,17 +49,7 @@ class FakeGh:
             }
         )
 
-    def _graphql(self, args: list[str]) -> str:
-        # closeIssue(stateReason: DUPLICATE, duplicateIssueId: ...)
-        self.mutating_calls.append(args)
-        fields = dict(
-            a.split("=", 1) for a in args if "=" in a and not a.startswith("query=")
-        )
-        target = self._by_node_id(fields["issue"])
-        assert self._by_node_id(fields["dup"]) is not None
-        target["state"] = "closed"
-        target["state_reason"] = "duplicate"
-        return json.dumps({"data": {"closeIssue": {"issue": {"id": fields["issue"]}}}})
+    # -- graphql mutations ----------------------------------------------
 
     def _by_node_id(self, node_id: str) -> dict:
         for issue in self.issues.values():
@@ -85,27 +57,63 @@ class FakeGh:
                 return issue
         raise AssertionError(f"unknown node id {node_id}")
 
-    def _issue_cmd(self, args: list[str]) -> str:
-        self.mutating_calls.append(args)
-        number = int(args[2])
-        repo = args[args.index("--repo") + 1]
-        issue = self._find(repo, number)
-        if args[1] == "edit":
-            for flag, value in zip(args, args[1:]):
-                if flag == "--add-label" and value not in issue["labels"]:
-                    issue["labels"] = [*issue["labels"], value]
-                if flag == "--remove-label" and value in issue["labels"]:
-                    issue["labels"] = [x for x in issue["labels"] if x != value]
-        elif args[1] == "close":
-            issue["state"] = "closed"
-            reason = args[args.index("--reason") + 1]
-            issue["state_reason"] = (
-                "completed" if reason == "completed" else "not_planned"
+    def _graphql(self, input: str) -> str:
+        payload = json.loads(input)
+        query, variables = payload["query"], payload["variables"]
+        self.mutating_calls.append(["api", "graphql", query])
+        if "addLabelsToLabelable" in query:
+            issue = self._by_node_id(variables["id"])
+            for lid in variables["labels"]:
+                name = lid.split(":", 2)[2]
+                if name not in issue["labels"]:
+                    issue["labels"] = [*issue["labels"], name]
+            return json.dumps(
+                {"data": {"addLabelsToLabelable": {"clientMutationId": None}}}
             )
-        elif args[1] == "reopen":
-            issue["state"] = "open"
-            issue["state_reason"] = "reopened"
-        else:
-            raise AssertionError(f"unexpected issue subcommand: {args}")
-        issue["updated_at"] = issue["updated_at"] + "+m"
-        return ""
+        if "removeLabelsFromLabelable" in query:
+            issue = self._by_node_id(variables["id"])
+            for lid in variables["labels"]:
+                name = lid.split(":", 2)[2]
+                issue["labels"] = [x for x in issue["labels"] if x != name]
+            return json.dumps(
+                {"data": {"removeLabelsFromLabelable": {"clientMutationId": None}}}
+            )
+        if "addComment" in query:
+            cid = self._next_comment_id
+            self._next_comment_id += 1
+            issue = self._by_node_id(variables["id"])
+            ((repo, number),) = [k for k, v in self.issues.items() if v is issue]
+            self.comments[cid] = {
+                "repo": repo,
+                "number": number,
+                "body": variables["body"],
+            }
+            return json.dumps(
+                {"data": {"addComment": {"commentEdge": {"node": {"databaseId": cid}}}}}
+            )
+        if "deleteIssueComment" in query:
+            cid = int(variables["id"].split(":", 1)[1])
+            del self.comments[cid]
+            return json.dumps(
+                {"data": {"deleteIssueComment": {"clientMutationId": None}}}
+            )
+        if "reopenIssue" in query:
+            issue = self._by_node_id(variables["id"])
+            issue["state"], issue["state_reason"] = "open", "reopened"
+            return json.dumps(
+                {"data": {"reopenIssue": {"issue": {"id": variables["id"]}}}}
+            )
+        if "closeIssue" in query:
+            issue = self._by_node_id(variables["id"])
+            issue["state"] = "closed"
+            if "DUPLICATE" in query:
+                assert self._by_node_id(variables["dup"]) is not None
+                issue["state_reason"] = "duplicate"
+            else:
+                issue["state_reason"] = (
+                    "completed" if variables["reason"] == "COMPLETED" else "not_planned"
+                )
+            return json.dumps(
+                {"data": {"closeIssue": {"issue": {"id": variables["id"]}}}}
+            )
+        raise AssertionError(f"unexpected graphql query: {query}")

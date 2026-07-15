@@ -43,7 +43,7 @@ def test_select_auto_filters_by_promotion_and_floor():
     assert picked[0]["audit"] is False
 
 
-def test_auto_writes_synthetic_decisions_then_executes(tmp_path):
+def test_auto_writes_synthetic_decisions_then_executes(tmp_path, gh_relay):
     dirs = {
         "decisions_dir": tmp_path / "dec",
         "proposals_dir": tmp_path / "prop",
@@ -74,6 +74,7 @@ def test_auto_writes_synthetic_decisions_then_executes(tmp_path):
             }
         }
     )
+    gh_relay.install(gh)
     summary = executor.execute(
         con,
         run_gh=gh,
