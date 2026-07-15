@@ -111,10 +111,10 @@ def _cmd_snapshot_bootstrap(args: argparse.Namespace) -> int:
 
 
 def _cmd_analytics_export(args: argparse.Namespace) -> int:
+    out = args._out
     con = _open_db(args.db)
-    analytics_mod.export(con, args.out)
-    print(f"wrote {args.out}")
-    return 0
+    payload = analytics_mod.export(con, args.out)
+    return out.emit(payload, f"wrote {args.out}")
 
 
 def _cmd_verify_counts(args: argparse.Namespace) -> int:

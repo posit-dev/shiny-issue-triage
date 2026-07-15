@@ -1,5 +1,6 @@
 import json
 
+from triage_verse import analytics as analytics_mod
 from triage_verse import analyze as analyze_mod
 from triage_verse import cli
 from triage_verse import executor as executor_mod
@@ -271,3 +272,15 @@ def test_execute_json_error_count_is_ok_true_exit_1(tmp_path, monkeypatch, capsy
     assert doc["ok"] is True
     assert doc["exit_code"] == 1
     assert doc["data"] == {"batch_id": "b1", "counts": {"applied": 3, "error": 1}}
+
+
+def test_analytics_export_json_emits_payload(tmp_path, monkeypatch, capsys):
+    payload = {"generated_at": "2026-07-15T00:00:00Z", "totals": {}, "repos": {}}
+    monkeypatch.setattr(analytics_mod, "export", lambda con, out_path: payload)
+    rc = cli.main(
+        ["analytics", "export", "--json", "--db", str(tmp_path / "m.sqlite"), "--out", str(tmp_path / "a.json")]
+    )
+    assert rc == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["command"] == "analytics export"
+    assert doc["data"] == payload

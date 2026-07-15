@@ -89,7 +89,7 @@ def close_reason_mix(
     return {r["reason"]: r["n"] for r in rows}
 
 
-def export(con: sqlite3.Connection, out_path: str | pathlib.Path) -> None:
+def export(con: sqlite3.Connection, out_path: str | pathlib.Path) -> dict:
     repos = [
         r["repo"]
         for r in con.execute(
@@ -116,3 +116,4 @@ def export(con: sqlite3.Connection, out_path: str | pathlib.Path) -> None:
     tmp = out_path.with_name(out_path.name + ".tmp")
     tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     tmp.replace(out_path)
+    return payload
