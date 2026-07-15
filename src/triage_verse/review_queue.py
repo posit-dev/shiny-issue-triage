@@ -22,12 +22,13 @@ HIGH_STAKES_ACTIONS = frozenset({"close", "close-duplicate"})
 KEY_ACTIONS = {
     "j": "next",
     "k": "prev",
+    "ArrowDown": "next",
+    "ArrowUp": "prev",
     "a": "approve",
     "r": "reject",
     "s": "skip",
     "e": "edit",
-    "o": "open",
-    "Enter": "open",
+    "Enter": "toggle",
     "Escape": "close",
 }
 
@@ -65,6 +66,20 @@ def _is_closed(con: sqlite3.Connection, repo: str, number: int) -> bool:
     return issue is not None and issue["state"] != "OPEN"
 
 
+# Verdicts that remove a proposal from the queue for good (subject to a stale
+# bounce). "skipped" is deliberately NOT here: skip means "not now", so the
+# proposal is kept and merely demoted (see below).
+TERMINAL_VERDICTS = frozenset({"approved", "edited", "rejected"})
+
+
+def _issue_updated_after(
+    con: sqlite3.Connection, repo: str, number: int, when: str
+) -> bool:
+    """True if the mirrored issue's updated_at is newer than `when`."""
+    issue = db.get_issue(con, repo, number)
+    return issue is not None and (issue["updated_at"] or "") > when
+
+
 def load_undecided(
     proposals_dir: str | pathlib.Path,
     decisions_dir: str | pathlib.Path,
@@ -78,27 +93,50 @@ def load_undecided(
                 t = r.get("executed_at", "")
                 if t > stale_at.get(r["proposal_id"], ""):
                     stale_at[r["proposal_id"]] = t
-    latest_decided: dict[str, str] = {}
+    # Latest decision (time + verdict) per proposal.
+    latest: dict[str, tuple[str, str | None]] = {}
     for r in iter_jsonl_records(decisions_dir):
-        if "proposal_id" not in r:
+        pid = r.get("proposal_id")
+        if pid is None:
             continue
         t = r.get("decided_at", "")
-        if t >= latest_decided.get(r["proposal_id"], ""):
-            latest_decided[r["proposal_id"]] = t
-    decided_ids = {
-        pid
-        for pid, t in latest_decided.items()
-        # A newer stale bounce voids the decision; the proposal resurfaces.
-        if stale_at.get(pid, "") <= t
-    }
-    proposals = [
-        {**r, "stale": True} if r.get("id") in stale_at else r
-        for r in iter_jsonl_records(proposals_dir)
-        if r.get("id") not in decided_ids
-        and r.get("action") in SUPPORTED_ACTIONS
-        and not _is_closed(con, r["repo"], r["issue"])
-    ]
-    return sorted(proposals, key=lambda r: r.get("confidence", 0.0), reverse=True)
+        if pid not in latest or t >= latest[pid][0]:
+            latest[pid] = (t, r.get("verdict"))
+
+    terminal_ids: set[str] = set()
+    skipped_at: dict[str, str] = {}
+    for pid, (t, verdict) in latest.items():
+        # A newer stale bounce voids any decision; the proposal resurfaces fresh.
+        if stale_at.get(pid, "") > t:
+            continue
+        if verdict in TERMINAL_VERDICTS:
+            terminal_ids.add(pid)
+        elif verdict == "skipped":
+            skipped_at[pid] = t
+
+    proposals = []
+    for r in iter_jsonl_records(proposals_dir):
+        pid = r.get("id")
+        if (
+            pid in terminal_ids
+            or r.get("action") not in SUPPORTED_ACTIONS
+            or _is_closed(con, r["repo"], r["issue"])
+        ):
+            continue
+        rec = {**r, "stale": True} if pid in stale_at else dict(r)
+        skip_t = skipped_at.get(pid) if isinstance(pid, str) else None
+        # A "not now" skip keeps the existing analysis and stays in the queue,
+        # demoted to the bottom -- UNLESS the issue has been updated since the
+        # skip, in which case it deserves a fresh look at full priority.
+        if skip_t is not None and not _issue_updated_after(
+            con, r["repo"], r["issue"], skip_t
+        ):
+            rec["deferred"] = True
+        proposals.append(rec)
+    return sorted(
+        proposals,
+        key=lambda r: (r.get("deferred", False), -(r.get("confidence") or 0.0)),
+    )
 
 
 _EVIDENCE_URL = re.compile(r"^https://github\.com/([^/]+/[^/]+)/issues/(\d+)$")

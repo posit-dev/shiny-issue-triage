@@ -49,6 +49,12 @@ workflow:
   - name: ai-triage:fix-requested
     color: 5319E7
     meaning: A maintainer asked an AI agent to attempt a draft-PR fix (Tier 2).
+  - name: ai-triage:needs-reprex
+    color: 6A1B9A
+    meaning: A maintainer asked an AI agent to attempt a minimal reprex and comment it on the issue.
+  - name: ai-triage:no-reprex
+    color: B39DDB
+    meaning: The reprex agent could not reproduce the issue; needs human review (never auto-closed).
 
 allowed_safe_output_labels:
   - regression

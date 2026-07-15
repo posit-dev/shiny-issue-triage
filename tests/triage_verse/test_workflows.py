@@ -55,3 +55,40 @@ def test_tier2_fix_guards_label_and_weekly_cap():
     assert "ai-triage:fix-requested" in text  # label guard present
     assert "gh run list" in text  # weekly-cap guard present
     assert "--draft" in text  # PR opened as draft
+
+
+def test_reprex_is_dispatch_only_with_issue_input():
+    doc, text = _load("reprex.yml")
+    triggers = doc.get(True, doc.get("on"))
+    assert "workflow_dispatch" in triggers
+    inputs = triggers["workflow_dispatch"]["inputs"]
+    assert "issue" in inputs and inputs["issue"]["required"] is True
+    active_cron = [
+        ln
+        for ln in text.splitlines()
+        if "cron:" in ln and not ln.strip().startswith("#")
+    ]
+    assert active_cron == []
+
+
+def test_reprex_guards_label_and_never_auto_closes():
+    doc, text = _load("reprex.yml")
+    assert "ai-triage:needs-reprex" in text  # label guard present
+    assert "gh run list" in text  # weekly-cap guard present
+    # Non-reproducible path labels for human review instead of closing.
+    assert "ai-triage:no-reprex" in text
+    assert "ai-triage:needs-review" in text
+    # High-stakes closes are never automated: no `gh issue close` in the workflow.
+    assert "gh issue close" not in text
+    # No issue-write permission is granted at the workflow level.
+    assert doc.get("permissions", {}).get("issues", "none") != "write"
+
+
+def test_reprex_input_not_interpolated_into_run_blocks():
+    # Script-injection guard: the untrusted issue input reaches shell only as an
+    # `env:` assignment, never interpolated directly into a shell command.
+    _, text = _load("reprex.yml")
+    inputs_lines = [ln for ln in text.splitlines() if "github.event.inputs" in ln]
+    assert inputs_lines  # the input is referenced somewhere
+    for ln in inputs_lines:
+        assert ln.strip().startswith("INPUT_ISSUE:"), f"unsafe interpolation: {ln!r}"

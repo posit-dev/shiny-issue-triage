@@ -20,6 +20,7 @@ from triage_verse import (
     decisions,
     drawer,
     gh,
+    reprex,
     review_queue,
     tier2,
 )
@@ -109,6 +110,18 @@ def row_ui(proposal: dict, snippet: str):
                     "padding: 0 0.5rem; margin-right: 0.5rem; font-size: 0.8rem;"
                 ),
                 title="Issue changed on GitHub after this was proposed; re-review.",
+            ),
+        )
+    if proposal.get("deferred"):
+        header.insert(
+            0,
+            ui.span(
+                "not now",
+                style=(
+                    "background-color: #757575; color: white; border-radius: 999px; "
+                    "padding: 0 0.5rem; margin-right: 0.5rem; font-size: 0.8rem;"
+                ),
+                title="Skipped for now; still here until decided or the issue updates.",
             ),
         )
     if high_stakes:
@@ -269,6 +282,11 @@ def app_tier2_label(repo: str, number: int, *, run_gh=gh.run_gh) -> None:
     tier2.request_fix(repo, number, run_gh=run_gh)
 
 
+def app_reprex_label(repo: str, number: int, *, run_gh=gh.run_gh) -> None:
+    """Apply the reprex-requested label to an issue (used by the drawer button)."""
+    reprex.request_reprex(repo, number, run_gh=run_gh)
+
+
 dashboard_panel = ui.nav_panel(
     "Dashboard",
     ui.layout_columns(
@@ -395,6 +413,11 @@ def _drawer_proposal(proposal: dict) -> list:
                 "Request AI fix",
                 style="background-color: #1565c0; color: white;",
             ),
+            ui.input_action_button(
+                "request_reprex",
+                "Request reprex",
+                style="background-color: #6a1b9a; color: white;",
+            ),
             style="display: flex; gap: 0.5rem; margin-bottom: 0.75rem;",
         ),
     ]
@@ -457,6 +480,18 @@ def _drawer_panel(state: dict, item: dict | None):
     return ui.tags.div(*parts, id="drawer-panel")
 
 
+skipped_panel = ui.nav_panel(
+    "Skipped",
+    ui.h4("Not-now queue"),
+    ui.p(
+        "Proposals you skipped, newest analysis intact. Approve / edit / reject "
+        "them here; they also return to the main queue if the issue updates.",
+        class_="text-muted",
+    ),
+    ui.output_ui("skipped_ui"),
+)
+
+
 audit_panel = ui.nav_panel(
     "Audit",
     ui.h4("Autonomy spot-audit queue"),
@@ -473,20 +508,22 @@ app_ui = ui.page_navbar(
     ui.nav_panel(
         "Queue",
         ui.p(
-            "Keys: j/k select · a approve · r reject · s skip · e edit"
-            " · o/Enter open · Esc close",
+            "Keys: j/k or ↑/↓ select · a approve · r reject · s skip · e edit"
+            " · Enter toggle drawer · Esc close",
             class_="text-muted",
         ),
         ui.input_action_button(
             "approve_visible", "Approve visible label/priority rows"
         ),
         ui.output_ui("queue_ui"),
-        ui.output_ui("drawer_ui"),
     ),
+    skipped_panel,
     dashboard_panel,
     audit_panel,
     title="Triage review",
     header=ui.TagList(ui.tags.style(_DRAWER_CSS + _KB_CSS), ui.tags.script(_KB_JS)),
+    # Page-level so the slide-in drawer works from any tab (Queue or Skipped).
+    footer=ui.output_ui("drawer_ui"),
 )
 
 
@@ -508,7 +545,23 @@ def server(input: Inputs, output: Outputs, session: Session):
             )
         )
 
+    def _active_rows() -> list[dict]:
+        """Undecided proposals shown in the main Queue (skipped ones live elsewhere)."""
+        return [r for r in queue.get() if not r.get("deferred")]
+
+    def _deferred_rows() -> list[dict]:
+        """Skipped ('not now') proposals, shown in the Skipped tab."""
+        return [r for r in queue.get() if r.get("deferred")]
+
+    def _select(proposal: dict) -> None:
+        """Move the keyboard highlight to `proposal`'s row (any interaction with it)."""
+        for i, p in enumerate(_active_rows()):
+            if p["id"] == proposal["id"]:
+                selected.set(i)
+                return
+
     def on_decide(proposal: dict, verdict: str, params: dict | None = None) -> None:
+        _select(proposal)
         decisions.write(
             [decisions.record(proposal, verdict, params=params)], DECISIONS_DIR
         )
@@ -518,6 +571,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         refresh()
 
     def on_open(proposal: dict) -> None:
+        _select(proposal)
         drawer_state.set(
             {
                 "repo": proposal["repo"],
@@ -527,6 +581,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         )
 
     def on_edit(proposal: dict) -> None:
+        _select(proposal)
         edit_target.set(proposal)
         ui.modal_show(
             ui.modal(
@@ -566,7 +621,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         if action == "close":
             drawer_state.set(None)
             return
-        rows = queue.get()
+        rows = _active_rows()  # keyboard nav drives the main Queue only
         sel = review_queue.clamp_index(selected.get(), len(rows))
         if sel is None:
             return
@@ -594,15 +649,21 @@ def server(input: Inputs, output: Outputs, session: Session):
         elif action == "edit":
             if rows[sel]["action"] not in review_queue.HIGH_STAKES_ACTIONS:
                 on_edit(rows[sel])
-        elif action == "open":
-            on_open(rows[sel])
+        elif action == "toggle":
+            proposal = rows[sel]
+            state = drawer_state.get()
+            if state is not None and state["proposal"]["id"] == proposal["id"]:
+                drawer_state.set(None)  # already open for this row -> close
+            else:
+                on_open(proposal)
 
-    @render.ui
-    def queue_ui():
-        rows = queue.get()
-        if not rows:
-            return ui.p("Queue empty — nothing to review.")
-        sel = review_queue.clamp_index(selected.get(), len(rows))
+    def _render_cards(rows: list[dict], *, highlight: bool) -> list:
+        """Render row cards, wiring each proposal's server handlers once.
+
+        Active and deferred rows are disjoint at any render, so a proposal's id
+        is a safe, stable module id across both the Queue and Skipped tabs.
+        """
+        sel = review_queue.clamp_index(selected.get(), len(rows)) if highlight else None
         cards = []
         for i, proposal in enumerate(rows):
             row_id = proposal["id"]
@@ -618,9 +679,17 @@ def server(input: Inputs, output: Outputs, session: Session):
             cards.append(
                 ui.div(
                     row_ui(row_id, proposal, _row_snippet(proposal)),
-                    class_="kb-selected" if i == sel else None,
+                    class_="kb-selected" if (highlight and i == sel) else None,
                 )
             )
+        return cards
+
+    @render.ui
+    def queue_ui():
+        rows = _active_rows()
+        if not rows:
+            return ui.p("Queue empty — nothing to review.")
+        cards = _render_cards(rows, highlight=True)
         cards.append(
             ui.tags.script(
                 "document.querySelector('.kb-selected')"
@@ -628,6 +697,13 @@ def server(input: Inputs, output: Outputs, session: Session):
             )
         )
         return ui.div(*cards)
+
+    @render.ui
+    def skipped_ui():
+        rows = _deferred_rows()
+        if not rows:
+            return ui.p("No skipped items.", class_="text-muted")
+        return ui.div(*_render_cards(rows, highlight=False))
 
     @render.ui
     def drawer_ui():
@@ -676,8 +752,35 @@ def server(input: Inputs, output: Outputs, session: Session):
             return
         repo = state["repo"]
         number = state["number"]
-        app_tier2_label(repo, number)
-        ui.notification_show(f"Requested AI fix for {repo}#{number}")
+        try:
+            app_tier2_label(repo, number)
+        except Exception as exc:  # gh.GhError, network, missing label, etc.
+            ui.notification_show(
+                f"Could not request AI fix for {repo}#{number}: {exc}",
+                type="error",
+                duration=10,
+            )
+            return
+        ui.notification_show(f"Requested AI fix for {repo}#{number}", type="message")
+
+    @reactive.effect
+    @reactive.event(input.request_reprex)
+    def _request_reprex():
+        state = drawer_state.get()
+        if state is None:
+            return
+        repo = state["repo"]
+        number = state["number"]
+        try:
+            app_reprex_label(repo, number)
+        except Exception as exc:  # gh.GhError, network, missing label, etc.
+            ui.notification_show(
+                f"Could not request reprex for {repo}#{number}: {exc}",
+                type="error",
+                duration=10,
+            )
+            return
+        ui.notification_show(f"Requested reprex for {repo}#{number}", type="message")
 
     @reactive.effect
     @reactive.event(input.approve_visible)
@@ -701,7 +804,7 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @render.text
     def stat_queue_depth():
-        return str(len(queue.get()))
+        return str(len(_active_rows()))
 
     @render.text
     def stat_open_issues():
