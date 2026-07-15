@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from triage_verse import gh
@@ -80,7 +82,7 @@ def test_unknown_shape_refused():
 # --- guarded graphql mutations -------------------------------------------
 def _mutation_payload(field):
     query = "mutation($id: ID!) { %s(input: {issueId: $id}) { issue { id } } }" % field
-    return '{"query": %r, "variables": {}}' % query
+    return json.dumps({"query": query, "variables": {}})
 
 
 def test_mutation_allowed_when_operation_field_and_repo_ok():
@@ -130,6 +132,11 @@ def test_mutation_refused_when_repo_not_in_allowlist():
             operation="closeIssue",
             repos=["evil/repo"],
         )
+
+
+def test_graphql_unparseable_payload_refused():
+    with pytest.raises(gh.EgressRefused):
+        _classify(["api", "graphql", "--input", "-"], input="{not json")
 
 
 def test_repo_check_canonicalizes_case_and_whitespace():

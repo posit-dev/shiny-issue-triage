@@ -91,10 +91,10 @@ def _graphql_query(rest: list[str], input: str | None) -> str:
     if input:
         try:
             return str(json.loads(input).get("query", ""))
-        except (json.JSONDecodeError, AttributeError):
-            # Fail-closed: try to detect mutation content in unparseable input.
-            m = re.search(r"(mutation\b[^'\"]*)", input)
-            return m.group(1) if m else ""
+        except (json.JSONDecodeError, AttributeError) as exc:
+            raise EgressRefused(
+                "unparseable graphql payload — refusing fail-closed"
+            ) from exc
     return ""
 
 
