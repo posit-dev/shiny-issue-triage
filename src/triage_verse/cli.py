@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
 import os
 import pathlib
 import sys
@@ -23,6 +24,50 @@ DEFAULT_DB = ".data/mirror.sqlite"
 DEFAULT_CONFIG = "config/repos.yaml"
 DEFAULT_MODELS = "config/models.yaml"
 DEFAULT_PROPOSALS = ".data/proposals"
+
+
+class Output:
+    """Routes command output for human (prose to stdout) or --json mode
+    (one envelope to stdout, logs to stderr)."""
+
+    def __init__(self, command: str, json_mode: bool) -> None:
+        self.command = command
+        self.json_mode = json_mode
+
+    def log(self, msg: str) -> None:
+        print(msg, file=sys.stderr if self.json_mode else sys.stdout)
+
+    def emit(self, data: object, human: str, exit_code: int = 0) -> int:
+        if self.json_mode:
+            print(
+                json.dumps(
+                    {
+                        "command": self.command,
+                        "ok": True,
+                        "exit_code": exit_code,
+                        "data": data,
+                    }
+                )
+            )
+        else:
+            print(human)
+        return exit_code
+
+    def fail(self, message: str, exit_code: int = 1) -> int:
+        if self.json_mode:
+            print(
+                json.dumps(
+                    {
+                        "command": self.command,
+                        "ok": False,
+                        "exit_code": exit_code,
+                        "error": message,
+                    }
+                )
+            )
+        else:
+            print(f"error: {message}", file=sys.stderr)
+        return exit_code
 
 
 def _open_db(path: str) -> "db.sqlite3.Connection":
