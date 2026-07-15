@@ -15,6 +15,7 @@ from . import embed as embed_mod
 from . import executor as executor_mod
 from . import gh
 from . import llm
+from . import proposals as proposals_mod
 from . import sync as sync_mod
 from . import snapshot as snapshot_mod
 from . import verify as verify_mod
@@ -170,6 +171,32 @@ def _cmd_execute(args: argparse.Namespace) -> int:
     )
     print(f"batch {summary['batch_id']}: {summary['counts']}")
     return 1 if summary["counts"]["error"] else 0
+
+
+def _cmd_proposals_prune(args: argparse.Namespace) -> int:
+    proposals_dir = _env_default(
+        args.proposals_dir, "TRIAGE_VERSE_PROPOSALS", DEFAULT_PROPOSALS
+    )
+    try:
+        matches = proposals_mod.prune_proposals(
+            proposals_dir, args.target, apply=args.apply
+        )
+    except ValueError as exc:
+        print(exc)
+        return 1
+    for m in matches:
+        rec = m["record"]
+        print(
+            f"  {m['file']}:{m['line']}  "
+            f"{rec.get('repo')}#{rec.get('issue')}  id={rec.get('id')!r}"
+        )
+    verb = "Removed" if args.apply else "Would remove"
+    print(f"{verb} {len(matches)} proposal record(s).")
+    print(
+        "GitHub is the source of truth. Re-run `triage-verse analyze` to "
+        "regenerate valid proposals for these issues."
+    )
+    return 0
 
 
 def _run_git(args, *, cwd=None):
@@ -538,6 +565,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--write", action="store_true", help="write config/autonomy.yaml"
     )
     p_auto_st.set_defaults(func=_cmd_autonomy_status)
+
+    p_prop = sub.add_parser("proposals", help="maintain the proposal log")
+    prop_sub = p_prop.add_subparsers(dest="proposals_command", required=True)
+    p_prune = prop_sub.add_parser(
+        "prune",
+        help="remove proposal records with an invalid Shiny module id",
+    )
+    p_prune.add_argument(
+        "target", help="a proposal id, or a path to a proposals .jsonl file"
+    )
+    p_prune.add_argument("--proposals-dir", default=None)
+    p_prune.add_argument(
+        "--apply", action="store_true", help="rewrite files (default: dry run)"
+    )
+    p_prune.set_defaults(func=_cmd_proposals_prune)
 
     return parser
 

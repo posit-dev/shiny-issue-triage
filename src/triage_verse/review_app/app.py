@@ -662,6 +662,8 @@ def server(input: Inputs, output: Outputs, session: Session):
 
         Active and deferred rows are disjoint at any render, so a proposal's id
         is a safe, stable module id across both the Queue and Skipped tabs.
+        `review_queue.load_undecided` also drops any proposal whose id isn't a
+        valid Shiny module namespace, so `row_ui`/`row_server` never raise here.
         """
         sel = review_queue.clamp_index(selected.get(), len(rows)) if highlight else None
         cards = []
