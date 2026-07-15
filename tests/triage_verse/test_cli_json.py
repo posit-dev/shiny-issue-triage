@@ -279,7 +279,15 @@ def test_analytics_export_json_emits_payload(tmp_path, monkeypatch, capsys):
     payload = {"generated_at": "2026-07-15T00:00:00Z", "totals": {}, "repos": {}}
     monkeypatch.setattr(analytics_mod, "export", lambda con, out_path: payload)
     rc = cli.main(
-        ["analytics", "export", "--json", "--db", str(tmp_path / "m.sqlite"), "--out", str(tmp_path / "a.json")]
+        [
+            "analytics",
+            "export",
+            "--json",
+            "--db",
+            str(tmp_path / "m.sqlite"),
+            "--out",
+            str(tmp_path / "a.json"),
+        ]
     )
     assert rc == 0
     doc = json.loads(capsys.readouterr().out)
@@ -288,9 +296,56 @@ def test_analytics_export_json_emits_payload(tmp_path, monkeypatch, capsys):
 
 
 def test_snapshot_publish_json(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(snapshot_mod, "publish", lambda db, *, dated: snapshot_mod.LATEST_TAG)
+    monkeypatch.setattr(
+        snapshot_mod, "publish", lambda db, *, dated: snapshot_mod.LATEST_TAG
+    )
     rc = cli.main(["snapshot", "publish", "--json", "--db", str(tmp_path / "m.sqlite")])
     assert rc == 0
     doc = json.loads(capsys.readouterr().out)
     assert doc["command"] == "snapshot publish"
-    assert doc["data"] == {"tag": snapshot_mod.LATEST_TAG, "latest_tag": snapshot_mod.LATEST_TAG}
+    assert doc["data"] == {
+        "tag": snapshot_mod.LATEST_TAG,
+        "latest_tag": snapshot_mod.LATEST_TAG,
+    }
+
+
+def test_steady_state_dry_run_json(tmp_path, monkeypatch, capsys):
+    cfg = _repos_cfg(tmp_path)
+    rc = cli.main(
+        [
+            "steady-state",
+            "--json",
+            "--dry-run",
+            "--db",
+            str(tmp_path / "m.sqlite"),
+            "--config",
+            str(cfg),
+        ]
+    )
+    assert rc == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["command"] == "steady-state"
+    assert doc["data"]["dry_run"] is True
+    assert "state-pull" in doc["data"]["stages"]
+
+
+def test_autonomy_status_json_empty(tmp_path, monkeypatch, capsys):
+    from triage_verse import autonomy, review_queue
+
+    monkeypatch.setattr(review_queue, "iter_jsonl_records", lambda d: [])
+    monkeypatch.setattr(autonomy, "evaluate", lambda decisions, results, cfg: {})
+    rc = cli.main(
+        [
+            "autonomy",
+            "status",
+            "--json",
+            "--decisions-dir",
+            str(tmp_path),
+            "--results-dir",
+            str(tmp_path),
+        ]
+    )
+    assert rc == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["command"] == "autonomy status"
+    assert doc["data"] == {"categories": {}, "wrote": None}
