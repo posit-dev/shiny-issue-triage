@@ -1,0 +1,72 @@
+name: Reprex attempt
+
+# DORMANT: manual dispatch only. Attempts a MINIMAL reprex and comments it on the
+# issue. Commenting only APPENDS context (a reprex or a "could not reproduce"
+# note) — it never edits or removes existing issue content. It NEVER auto-closes:
+# a non-reproducible issue is labelled ai-triage:no-reprex + ai-triage:needs-review
+# for human review (high-stakes closes are never automated).
+on:
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: "Target issue as owner/name#N"
+        required: true
+      model:
+        description: "Claude model"
+        required: false
+        default: sonnet
+        type: choice
+        options: [sonnet, opus]
+
+permissions:
+  contents: read
+
+jobs:
+  reprex:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Guard - label present and issue open
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_ISSUE: ${{ github.event.inputs.issue }}
+        run: |
+          set -euo pipefail
+          repo="${INPUT_ISSUE%%#*}"
+          num="${INPUT_ISSUE##*#}"
+          state=$(gh issue view "$num" --repo "$repo" --json state,labels \
+            --jq '.state + " " + ([.labels[].name] | join(","))')
+          echo "$state" | grep -q "ai-triage:needs-reprex" \
+            || { echo "issue lacks ai-triage:needs-reprex label"; exit 1; }
+          echo "$state" | grep -qi "^OPEN" || { echo "issue not open"; exit 1; }
+      - name: Guard - weekly cap
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          since=$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)
+          count=$(gh run list --workflow reprex.yml --status success \
+            --created ">=$since" --json databaseId --jq 'length')
+          if [ "$count" -ge 10 ]; then echo "weekly reprex cap reached"; exit 1; fi
+      - name: Mint installation token
+        run: node .github/triage/scripts/create-github-app-token-map.mjs
+        env:
+          APP_ID: ${{ secrets.TRIAGE_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.TRIAGE_APP_PRIVATE_KEY }}
+      - name: Install Claude CLI
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Attempt reprex and comment on issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          echo "Reprex session runs here:"
+          echo " - reads the issue, attempts a minimal reproducible example"
+          echo " - if reproduced: appends a comment with the minimal reprex"
+          echo " - if NOT reproducible: appends a 'could not reproduce' comment and adds"
+          echo "   ai-triage:no-reprex + ai-triage:needs-review (NEVER auto-closes);"
+          echo "   a human closes it from the review queue if warranted"
+      - name: Summary
+        env:
+          INPUT_ISSUE: ${{ github.event.inputs.issue }}
+        run: echo "Reprex attempt for ${INPUT_ISSUE}" >> "$GITHUB_STEP_SUMMARY"

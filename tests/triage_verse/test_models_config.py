@@ -73,3 +73,38 @@ def test_workers_defaults_to_1_when_absent(tmp_path):
 def test_workers_read_from_checked_in_config():
     cfg = load_models_config(REPO_ROOT / "config" / "models.yaml")
     assert cfg.workers == 2
+
+
+def test_tiers_and_autonomy_defaults_and_overrides(tmp_path):
+    from triage_verse import config
+
+    base = (
+        "backend: claude_cli\n"
+        "embedding: {model: m, dim: 3, candidate_top_k: 1, cosine_threshold: 0.8}\n"
+        "stages:\n"
+        "  classify: {model: c, max_tokens: 1}\n"
+        "  recheck: {model: r, max_tokens: 1}\n"
+        "  dedup: {model: d, max_tokens: 1}\n"
+        "batch: {max_requests_per_batch: 1, poll_interval_seconds: 1}\n"
+        "spend: {batch_only: true, max_usd_per_day: 1, pricing: {}}\n"
+    )
+    p = tmp_path / "m.yaml"
+    p.write_text(base, encoding="utf-8")
+    cfg = config.load_models_config(p)
+    assert cfg.tiers.tier1_max_per_day == 25
+    assert cfg.tiers.tier2_max_per_week == 10
+    assert cfg.autonomy.min_decisions == 200
+    assert cfg.autonomy.min_precision == 0.98
+    assert cfg.autonomy.confidence_floor == 0.9
+    assert cfg.autonomy.audit_rate == 0.10
+
+    p.write_text(
+        base + "tiers: {tier1_max_per_day: 5, tier2_max_per_week: 2}\n"
+        "autonomy: {min_decisions: 50, min_precision: 0.95,"
+        " confidence_floor: 0.8, audit_rate: 0.25}\n",
+        encoding="utf-8",
+    )
+    cfg = config.load_models_config(p)
+    assert cfg.tiers.tier1_max_per_day == 5
+    assert cfg.autonomy.min_decisions == 50
+    assert cfg.autonomy.audit_rate == 0.25

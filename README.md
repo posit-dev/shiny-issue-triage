@@ -62,5 +62,46 @@ checked before every new dispatch, bounding a tripped budget's overshoot
 use `--limit` to additionally bound a single run's spend (each call costs
 roughly $0.01-0.02).
 
+## Executor pipeline (P3)
+
+Applies approved review decisions to GitHub and can reverse a batch afterward.
+
+```bash
+uv run triage-verse execute                       # dry-run: preview mutations, no changes
+uv run triage-verse execute --apply                # apply approved proposals to GitHub
+uv run triage-verse undo --batch <id>               # dry-run: preview the reversal
+uv run triage-verse undo --batch <id> --apply       # reverse a batch: labels restored, issues reopened, executor comments deleted
+```
+
+`execute` is dry-run by default; pass `--apply` to mutate. Each issue is
+freshness-checked before mutation, and results append to `.data/results/`.
+`undo` is also dry-run by default and reverses a previously executed batch.
+
+## Steady state & automation (P5)
+
+Commands for the continuous triage loop and graduated autonomy system.
+
+```bash
+uv run triage-verse state pull                 # merge triage-state branch into local .data/
+uv run triage-verse state push                 # push local .data/ back to triage-state branch
+
+uv run triage-verse steady-state               # orchestrate one loop iteration (sync → analyze → execute)
+                                               # note: the scheduled workflow ships dormant (cron commented out)
+
+uv run triage-verse tier1                      # run "already fixed?" sessions, capped per day
+uv run triage-verse tier2 owner/repo#N         # label an issue for an AI draft-PR attempt
+
+uv run triage-verse autonomy status            # show per-category precision + promotion eligibility
+uv run triage-verse autonomy status --write    # write promoted categories → config/autonomy.yaml
+
+uv run triage-verse execute --auto             # auto-apply promoted categories with spot audits
+```
+
+`execute --auto` writes synthetic `auto-approved` decisions for categories that
+meet the precision threshold, deterministically samples a fraction for human
+audit, then executes them. The review app's **Audit** tab lists executed
+audit-flagged items for confirm/reject; rejecting records a precision failure
+and prints the undo command.
+
 Design: `docs/superpowers/specs/2026-06-12-shinyverse-issue-triage-design.md`.
 Open followups: `docs/superpowers/plans/2026-06-12-triage-verse-followups.md`.

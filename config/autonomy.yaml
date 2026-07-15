@@ -1,0 +1,4 @@
+# Written by `triage-verse autonomy status --write`. Categories listed here
+# auto-apply above their confidence_floor via `triage-verse execute --auto`.
+# Empty = fully human-gated (v1 default).
+promoted: {}

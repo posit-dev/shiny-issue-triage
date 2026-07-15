@@ -1,0 +1,34 @@
+name: Steady-state triage
+
+# DORMANT: manual dispatch only. To activate the 12h cadence, uncomment the
+# schedule block below.
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: "0 */12 * * *"
+
+permissions:
+  contents: write  # triage-state branch + mirror releases; NO issue/PR writes
+
+jobs:
+  steady-state:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Install deps
+        run: uv sync
+      - name: Install Claude CLI
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Bootstrap mirror
+        run: uv run triage-verse snapshot bootstrap
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Run steady-state loop
+        run: uv run triage-verse steady-state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      - name: Summary
+        run: echo "steady-state run complete" >> "$GITHUB_STEP_SUMMARY"

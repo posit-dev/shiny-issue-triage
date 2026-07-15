@@ -13,11 +13,22 @@ from typing import Callable
 
 from shiny import App, Inputs, Outputs, Session, module, reactive, render, ui
 
-from triage_verse import analytics, dashboard, db, decisions, drawer, review_queue
+from triage_verse import (
+    analytics,
+    dashboard,
+    db,
+    decisions,
+    drawer,
+    gh,
+    reprex,
+    review_queue,
+    tier2,
+)
 
 DB_PATH = os.environ.get("TRIAGE_VERSE_DB", ".data/mirror.sqlite")
 PROPOSALS_DIR = os.environ.get("TRIAGE_VERSE_PROPOSALS", ".data/proposals")
 DECISIONS_DIR = os.environ.get("TRIAGE_VERSE_DECISIONS", ".data/decisions")
+RESULTS_DIR = os.environ.get("TRIAGE_VERSE_RESULTS", ".data/results")
 
 pathlib.Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
 _con = db.connect(DB_PATH)
@@ -89,6 +100,31 @@ def row_ui(proposal: dict, snippet: str):
                 ),
             ),
         )
+    if proposal.get("stale"):
+        header.insert(
+            0,
+            ui.span(
+                "stale",
+                style=(
+                    "background-color: #ef6c00; color: white; border-radius: 999px; "
+                    "padding: 0 0.5rem; margin-right: 0.5rem; font-size: 0.8rem;"
+                ),
+                title="Issue changed on GitHub after this was proposed; re-review.",
+            ),
+        )
+    if proposal.get("deferred"):
+        header.insert(
+            0,
+            ui.span(
+                "not now",
+                style=(
+                    "background-color: #757575; color: white; border-radius: 999px; "
+                    "padding: 0 0.5rem; margin-right: 0.5rem; font-size: 0.8rem;"
+                ),
+                title="Skipped for now; still here until decided or the issue updates.",
+            ),
+        )
+    if high_stakes:
         buttons = [
             ui.input_action_button(
                 "open_evidence",
@@ -191,6 +227,65 @@ _repo_choices = ["All repos"] + [
         "SELECT DISTINCT repo FROM issues WHERE is_pr=0 ORDER BY repo"
     )
 ]
+
+
+def app_audit_items(decisions_dir, results_dir) -> list[dict]:
+    """Executed auto-approved decisions flagged for spot audit, needing confirm/reject."""
+    audit_decisions = {
+        d["id"]: d
+        for d in review_queue.iter_jsonl_records(decisions_dir)
+        if d.get("decided_by") == "autonomy" and d.get("audit") is True
+    }
+    out = []
+    for r in review_queue.iter_jsonl_records(results_dir):
+        d = audit_decisions.get(r.get("decision_id"))
+        if d is None or r.get("status") != "applied":
+            continue
+        out.append(
+            {
+                "repo": r["repo"],
+                "issue": r["issue"],
+                "action": r["action"],
+                "params": d.get("params"),
+                "batch_id": r.get("batch_id"),
+                "result_id": r.get("id"),
+                "proposal_id": d.get("proposal_id"),
+            }
+        )
+    return out
+
+
+def app_audit_reject(item: dict, *, decisions_dir=DECISIONS_DIR) -> str:
+    """Record a rejected decision for an audited auto-apply and return the undo command."""
+    rec = {
+        "id": __import__("uuid").uuid4().hex,
+        "proposal_id": item["proposal_id"],
+        "repo": item["repo"],
+        "issue": item["issue"],
+        "action": item["action"],
+        "params": item["params"],
+        "verdict": "rejected",
+        "decided_by": "human",
+        "decided_at": __import__("datetime")
+        .datetime.now(__import__("datetime").timezone.utc)
+        .strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    decisions.write([rec], decisions_dir)
+    return (
+        f"triage-verse undo --batch {item['batch_id']}"
+        f" --issue {item['repo']}#{item['issue']} --apply"
+    )
+
+
+def app_tier2_label(repo: str, number: int, *, run_gh=gh.run_gh) -> None:
+    """Apply the Tier-2 fix-requested label to an issue (used by the drawer button)."""
+    tier2.request_fix(repo, number, run_gh=run_gh)
+
+
+def app_reprex_label(repo: str, number: int, *, run_gh=gh.run_gh) -> None:
+    """Apply the reprex-requested label to an issue (used by the drawer button)."""
+    reprex.request_reprex(repo, number, run_gh=run_gh)
+
 
 dashboard_panel = ui.nav_panel(
     "Dashboard",
@@ -313,6 +408,16 @@ def _drawer_proposal(proposal: dict) -> list:
             ui.input_action_button(
                 "drawer_skip", "Skip", style="background-color: #757575; color: white;"
             ),
+            ui.input_action_button(
+                "request_ai_fix",
+                "Request AI fix",
+                style="background-color: #1565c0; color: white;",
+            ),
+            ui.input_action_button(
+                "request_reprex",
+                "Request reprex",
+                style="background-color: #6a1b9a; color: white;",
+            ),
             style="display: flex; gap: 0.5rem; margin-bottom: 0.75rem;",
         ),
     ]
@@ -375,29 +480,58 @@ def _drawer_panel(state: dict, item: dict | None):
     return ui.tags.div(*parts, id="drawer-panel")
 
 
+skipped_panel = ui.nav_panel(
+    "Skipped",
+    ui.h4("Not-now queue"),
+    ui.p(
+        "Proposals you skipped, newest analysis intact. Approve / edit / reject "
+        "them here; they also return to the main queue if the issue updates.",
+        class_="text-muted",
+    ),
+    ui.output_ui("skipped_ui"),
+)
+
+
+audit_panel = ui.nav_panel(
+    "Audit",
+    ui.h4("Autonomy spot-audit queue"),
+    ui.p(
+        "Auto-approved decisions flagged for human confirmation. "
+        "Reject = precision failure; prints the undo command.",
+        class_="text-muted",
+    ),
+    ui.output_ui("audit_ui"),
+)
+
+
 app_ui = ui.page_navbar(
     ui.nav_panel(
         "Queue",
         ui.p(
-            "Keys: j/k select · a approve · r reject · s skip · e edit"
-            " · o/Enter open · Esc close",
+            "Keys: j/k or ↑/↓ select · a approve · r reject · s skip · e edit"
+            " · Enter toggle drawer · Esc close",
             class_="text-muted",
         ),
         ui.input_action_button(
             "approve_visible", "Approve visible label/priority rows"
         ),
         ui.output_ui("queue_ui"),
-        ui.output_ui("drawer_ui"),
     ),
+    skipped_panel,
     dashboard_panel,
+    audit_panel,
     title="Triage review",
     header=ui.TagList(ui.tags.style(_DRAWER_CSS + _KB_CSS), ui.tags.script(_KB_JS)),
+    # Page-level so the slide-in drawer works from any tab (Queue or Skipped).
+    footer=ui.output_ui("drawer_ui"),
 )
 
 
 def server(input: Inputs, output: Outputs, session: Session):
     queue = reactive.value(
-        review_queue.load_undecided(PROPOSALS_DIR, DECISIONS_DIR, _con)
+        review_queue.load_undecided(
+            PROPOSALS_DIR, DECISIONS_DIR, _con, results_dir=RESULTS_DIR
+        )
     )
     drawer_state = reactive.value[dict | None](None)
     selected = reactive.value[int | None](None)
@@ -405,9 +539,29 @@ def server(input: Inputs, output: Outputs, session: Session):
     wired: set[str] = set()
 
     def refresh() -> None:
-        queue.set(review_queue.load_undecided(PROPOSALS_DIR, DECISIONS_DIR, _con))
+        queue.set(
+            review_queue.load_undecided(
+                PROPOSALS_DIR, DECISIONS_DIR, _con, results_dir=RESULTS_DIR
+            )
+        )
+
+    def _active_rows() -> list[dict]:
+        """Undecided proposals shown in the main Queue (skipped ones live elsewhere)."""
+        return [r for r in queue.get() if not r.get("deferred")]
+
+    def _deferred_rows() -> list[dict]:
+        """Skipped ('not now') proposals, shown in the Skipped tab."""
+        return [r for r in queue.get() if r.get("deferred")]
+
+    def _select(proposal: dict) -> None:
+        """Move the keyboard highlight to `proposal`'s row (any interaction with it)."""
+        for i, p in enumerate(_active_rows()):
+            if p["id"] == proposal["id"]:
+                selected.set(i)
+                return
 
     def on_decide(proposal: dict, verdict: str, params: dict | None = None) -> None:
+        _select(proposal)
         decisions.write(
             [decisions.record(proposal, verdict, params=params)], DECISIONS_DIR
         )
@@ -417,6 +571,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         refresh()
 
     def on_open(proposal: dict) -> None:
+        _select(proposal)
         drawer_state.set(
             {
                 "repo": proposal["repo"],
@@ -426,6 +581,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         )
 
     def on_edit(proposal: dict) -> None:
+        _select(proposal)
         edit_target.set(proposal)
         ui.modal_show(
             ui.modal(
@@ -465,7 +621,7 @@ def server(input: Inputs, output: Outputs, session: Session):
         if action == "close":
             drawer_state.set(None)
             return
-        rows = queue.get()
+        rows = _active_rows()  # keyboard nav drives the main Queue only
         sel = review_queue.clamp_index(selected.get(), len(rows))
         if sel is None:
             return
@@ -493,15 +649,21 @@ def server(input: Inputs, output: Outputs, session: Session):
         elif action == "edit":
             if rows[sel]["action"] not in review_queue.HIGH_STAKES_ACTIONS:
                 on_edit(rows[sel])
-        elif action == "open":
-            on_open(rows[sel])
+        elif action == "toggle":
+            proposal = rows[sel]
+            state = drawer_state.get()
+            if state is not None and state["proposal"]["id"] == proposal["id"]:
+                drawer_state.set(None)  # already open for this row -> close
+            else:
+                on_open(proposal)
 
-    @render.ui
-    def queue_ui():
-        rows = queue.get()
-        if not rows:
-            return ui.p("Queue empty — nothing to review.")
-        sel = review_queue.clamp_index(selected.get(), len(rows))
+    def _render_cards(rows: list[dict], *, highlight: bool) -> list:
+        """Render row cards, wiring each proposal's server handlers once.
+
+        Active and deferred rows are disjoint at any render, so a proposal's id
+        is a safe, stable module id across both the Queue and Skipped tabs.
+        """
+        sel = review_queue.clamp_index(selected.get(), len(rows)) if highlight else None
         cards = []
         for i, proposal in enumerate(rows):
             row_id = proposal["id"]
@@ -517,9 +679,17 @@ def server(input: Inputs, output: Outputs, session: Session):
             cards.append(
                 ui.div(
                     row_ui(row_id, proposal, _row_snippet(proposal)),
-                    class_="kb-selected" if i == sel else None,
+                    class_="kb-selected" if (highlight and i == sel) else None,
                 )
             )
+        return cards
+
+    @render.ui
+    def queue_ui():
+        rows = _active_rows()
+        if not rows:
+            return ui.p("Queue empty — nothing to review.")
+        cards = _render_cards(rows, highlight=True)
         cards.append(
             ui.tags.script(
                 "document.querySelector('.kb-selected')"
@@ -527,6 +697,13 @@ def server(input: Inputs, output: Outputs, session: Session):
             )
         )
         return ui.div(*cards)
+
+    @render.ui
+    def skipped_ui():
+        rows = _deferred_rows()
+        if not rows:
+            return ui.p("No skipped items.", class_="text-muted")
+        return ui.div(*_render_cards(rows, highlight=False))
 
     @render.ui
     def drawer_ui():
@@ -568,6 +745,44 @@ def server(input: Inputs, output: Outputs, session: Session):
         _decide_from_drawer("skipped")
 
     @reactive.effect
+    @reactive.event(input.request_ai_fix)
+    def _request_ai_fix():
+        state = drawer_state.get()
+        if state is None:
+            return
+        repo = state["repo"]
+        number = state["number"]
+        try:
+            app_tier2_label(repo, number)
+        except Exception as exc:  # gh.GhError, network, missing label, etc.
+            ui.notification_show(
+                f"Could not request AI fix for {repo}#{number}: {exc}",
+                type="error",
+                duration=10,
+            )
+            return
+        ui.notification_show(f"Requested AI fix for {repo}#{number}", type="message")
+
+    @reactive.effect
+    @reactive.event(input.request_reprex)
+    def _request_reprex():
+        state = drawer_state.get()
+        if state is None:
+            return
+        repo = state["repo"]
+        number = state["number"]
+        try:
+            app_reprex_label(repo, number)
+        except Exception as exc:  # gh.GhError, network, missing label, etc.
+            ui.notification_show(
+                f"Could not request reprex for {repo}#{number}: {exc}",
+                type="error",
+                duration=10,
+            )
+            return
+        ui.notification_show(f"Requested reprex for {repo}#{number}", type="message")
+
+    @reactive.effect
     @reactive.event(input.approve_visible)
     def _approve_visible():
         decisions.write(
@@ -589,7 +804,7 @@ def server(input: Inputs, output: Outputs, session: Session):
 
     @render.text
     def stat_queue_depth():
-        return str(len(queue.get()))
+        return str(len(_active_rows()))
 
     @render.text
     def stat_open_issues():
@@ -677,6 +892,71 @@ def server(input: Inputs, output: Outputs, session: Session):
                 f"${r['usd']:,.2f}",
             ],
         )
+
+    # --- Audit tab ---
+
+    @render.ui
+    def audit_ui():
+        items = app_audit_items(DECISIONS_DIR, RESULTS_DIR)
+        if not items:
+            return ui.p("No audit items — all clear.", class_="text-muted")
+        rows = []
+        for item in items:
+            rows.append(
+                ui.card(
+                    ui.card_header(
+                        f"{item['repo']}#{item['issue']} — {item['action']}"
+                    ),
+                    ui.p(f"params: {item['params']}"),
+                    ui.p(f"batch: {item['batch_id']}"),
+                    ui.div(
+                        ui.input_action_button(
+                            f"audit_confirm_{item['result_id']}",
+                            "Confirm",
+                            style="background-color: #2e7d32; color: white;",
+                        ),
+                        ui.input_action_button(
+                            f"audit_reject_{item['result_id']}",
+                            "Reject",
+                            style="background-color: #c62828; color: white;",
+                        ),
+                        style="display: flex; gap: 0.5rem;",
+                    ),
+                )
+            )
+        # Wire dynamic handlers for each audit item's buttons
+        for item in items:
+            rid = item["result_id"]
+            _wire_audit_buttons(input, item, rid)
+
+        return ui.div(*rows)
+
+    audit_wired: set[str] = set()
+
+    def _wire_audit_buttons(input: Inputs, item: dict, rid: str) -> None:
+        if rid in audit_wired:
+            return
+        audit_wired.add(rid)
+        confirm_id = f"audit_confirm_{rid}"
+        reject_id = f"audit_reject_{rid}"
+
+        @reactive.effect
+        @reactive.event(getattr(input, confirm_id))
+        def _confirm(item=item):
+            ui.notification_show(
+                f"Confirmed: {item['repo']}#{item['issue']} — no action needed.",
+                type="message",
+            )
+
+        @reactive.effect
+        @reactive.event(getattr(input, reject_id))
+        def _reject(item=item):
+            undo_cmd = app_audit_reject(item)
+            ui.notification_show(
+                f"Rejected. Undo: {undo_cmd}",
+                type="warning",
+                duration=None,
+            )
 
 
 app = App(app_ui, server)

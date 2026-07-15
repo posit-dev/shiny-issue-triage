@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import os
 import pathlib
 import sys
 
@@ -11,6 +12,8 @@ from . import analytics as analytics_mod
 from . import analyze as analyze_mod
 from . import config, db
 from . import embed as embed_mod
+from . import executor as executor_mod
+from . import gh
 from . import llm
 from . import sync as sync_mod
 from . import snapshot as snapshot_mod
@@ -25,6 +28,10 @@ DEFAULT_PROPOSALS = ".data/proposals"
 def _open_db(path: str) -> "db.sqlite3.Connection":
     pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
     return db.connect(path)
+
+
+def _env_default(value: str | None, env: str, fallback: str) -> str:
+    return value if value is not None else os.environ.get(env, fallback)
 
 
 def _cmd_sync(args: argparse.Namespace) -> int:
@@ -93,7 +100,8 @@ def _cmd_embed(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_analyze(args: argparse.Namespace) -> int:
+def _run_analyze(args: argparse.Namespace) -> None:
+    """Shared analyze logic used by both the `analyze` command and `steady-state`."""
     cfg = config.load_models_config(args.models_config)
     con = _open_db(args.db)
     embedder = embed_mod.FastEmbedEmbedder(cfg.embed_model)
@@ -115,6 +123,10 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
         f"classified={summary['classified']} rechecked={summary['rechecked']} "
         f"pairs={summary['pairs']} halted_on_budget={summary['halted_on_budget']}"
     )
+
+
+def _cmd_analyze(args: argparse.Namespace) -> int:
+    _run_analyze(args)
     return 0
 
 
@@ -128,6 +140,235 @@ def _cmd_analyze_status(args: argparse.Namespace) -> int:
     for b in status["open_batches"]:
         print(f"  {b['batch_id']} [{b['stage']}] {b['status']}")
     return 0
+
+
+def _cmd_execute(args: argparse.Namespace) -> int:
+    args.db = _env_default(args.db, "TRIAGE_VERSE_DB", DEFAULT_DB)
+    args.decisions_dir = _env_default(
+        args.decisions_dir, "TRIAGE_VERSE_DECISIONS", ".data/decisions"
+    )
+    args.proposals_dir = _env_default(
+        args.proposals_dir, "TRIAGE_VERSE_PROPOSALS", DEFAULT_PROPOSALS
+    )
+    args.results_dir = _env_default(
+        args.results_dir, "TRIAGE_VERSE_RESULTS", ".data/results"
+    )
+    con = _open_db(args.db)
+    summary = executor_mod.execute(
+        con,
+        decisions_dir=args.decisions_dir,
+        proposals_dir=args.proposals_dir,
+        results_dir=args.results_dir,
+        labels_path=args.labels,
+        templates_dir=args.templates,
+        run_gh=gh.run_gh,
+        apply=args.apply,
+        auto=args.auto,
+        autonomy_path=args.autonomy,
+        repo=args.repo,
+        limit=args.limit,
+    )
+    print(f"batch {summary['batch_id']}: {summary['counts']}")
+    return 1 if summary["counts"]["error"] else 0
+
+
+def _run_git(args, *, cwd=None):
+    import subprocess
+
+    return subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    ).stdout
+
+
+def _ensure_state_clone(work_dir: str, branch: str) -> None:
+    if pathlib.Path(work_dir, ".git").exists():
+        return
+    origin = gh.run_gh(["repo", "view", "--json", "url", "-q", ".url"]).strip()
+    _run_git(["clone", "--branch", branch, "--single-branch", origin, work_dir])
+
+
+def _state_now() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _cmd_state_pull(args: argparse.Namespace) -> int:
+    from . import state
+
+    work = os.environ.get("TRIAGE_VERSE_STATE_WORKDIR", ".data/triage-state")
+    _ensure_state_clone(work, args.branch)
+    res = state.pull(
+        data_dir=args.data_dir, work_dir=work, run_git=_run_git, branch=args.branch
+    )
+    print(f"pulled: {res['files_updated']} files updated")
+    return 0
+
+
+def _cmd_state_push(args: argparse.Namespace) -> int:
+    from . import state
+
+    con = _open_db(args.db)
+    repos = [r.full for r in config.load_repos(args.config)]
+    work = os.environ.get("TRIAGE_VERSE_STATE_WORKDIR", ".data/triage-state")
+    _ensure_state_clone(work, args.branch)
+    res = state.push(
+        con,
+        repos,
+        data_dir=args.data_dir,
+        work_dir=work,
+        run_git=_run_git,
+        branch=args.branch,
+        now=_state_now(),
+    )
+    print(
+        f"push: {'committed' if res['pushed'] else 'no changes'} ({res['records']} records)"
+    )
+    return 0
+
+
+def _cmd_undo(args: argparse.Namespace) -> int:
+    args.db = _env_default(args.db, "TRIAGE_VERSE_DB", DEFAULT_DB)
+    args.results_dir = _env_default(
+        args.results_dir, "TRIAGE_VERSE_RESULTS", ".data/results"
+    )
+    con = _open_db(args.db)
+    summary = executor_mod.undo(
+        con,
+        results_dir=args.results_dir,
+        batch_id=args.batch,
+        issue=args.issue,
+        run_gh=gh.run_gh,
+        apply=args.apply,
+    )
+    print(f"batch {summary['batch_id']}: {summary['counts']}")
+    return 1 if summary["counts"]["error"] else 0
+
+
+def _cmd_tier1(args: argparse.Namespace) -> int:
+    con = _open_db(args.db)
+    repos = (
+        [args.repo] if args.repo else [r.full for r in config.load_repos(args.config)]
+    )
+    cfg = config.load_models_config(args.models_config)
+    from . import tier1
+
+    res = tier1.run(
+        con, repos, cfg=cfg, proposals_dir=args.proposals_dir, run_gh=gh.run_gh
+    )
+    print(
+        f"tier1: {res['sessions']} sessions, {res['proposals']} close proposals"
+        f"{' (halted on budget)' if res['halted_on_budget'] else ''}"
+    )
+    return 0
+
+
+def _cmd_tier2(args: argparse.Namespace) -> int:
+    from . import executor, tier2
+
+    ref = executor.parse_issue_ref(args.issue, default_repo="")
+    if ref is None:
+        print(f"error: cannot parse issue ref {args.issue!r}")
+        return 1
+    tier2.request_fix(ref[0], ref[1], run_gh=gh.run_gh)
+    print(f"labeled {ref[0]}#{ref[1]} with {tier2.LABEL}")
+    print(
+        f"kick off the fix: gh workflow run tier2-fix.yml -f issue={args.issue}"
+        f" -f model={args.model}"
+    )
+    return 0
+
+
+def _cmd_autonomy_status(args: argparse.Namespace) -> int:
+    from . import autonomy, review_queue
+    import yaml
+
+    cfg = config.load_models_config(args.models_config).autonomy
+    decisions = review_queue.iter_jsonl_records(args.decisions_dir)
+    results = review_queue.iter_jsonl_records(args.results_dir)
+    ev = autonomy.evaluate(decisions, results, cfg)
+    for action, e in sorted(ev.items()):
+        flag = "PROMOTE" if e["promote"] else "hold"
+        print(
+            f"{action}: reviewed={e['reviewed']} precision={e['precision']:.3f}"
+            f" audit_fail={e['audit_failures']} -> {flag}"
+        )
+    if not ev:
+        print("no eligible categories with reviewed decisions yet")
+    if args.write:
+        doc = autonomy.render_config(ev, cfg, today=_state_now()[:10])
+        pathlib.Path(args.out).write_text(
+            yaml.safe_dump(doc, sort_keys=True), encoding="utf-8"
+        )
+        print(f"wrote {args.out}")
+    return 0
+
+
+def _cmd_steady_state(args: argparse.Namespace) -> int:
+    from . import state, steady_state
+
+    con = _open_db(args.db)
+    repos = [r.full for r in config.load_repos(args.config)]
+    work = os.environ.get("TRIAGE_VERSE_STATE_WORKDIR", ".data/triage-state")
+
+    def _pull():
+        _ensure_state_clone(work, args.branch)
+        state.pull(
+            data_dir=args.data_dir, work_dir=work, run_git=_run_git, branch=args.branch
+        )
+
+    def _sync():
+        sync_mod.sync_all(con, repos, full=False, log=print)
+
+    def _analyze():
+        _run_analyze(args)
+
+    def _tier1():
+        if not args.no_tier1:
+            from . import tier1
+
+            tier1.run(
+                con,
+                repos,
+                cfg=config.load_models_config(args.models_config),
+                proposals_dir=args.proposals_dir,
+                run_gh=gh.run_gh,
+                log=print,
+            )
+
+    def _push():
+        state.push(
+            con,
+            repos,
+            data_dir=args.data_dir,
+            work_dir=work,
+            run_git=_run_git,
+            branch=args.branch,
+            now=_state_now(),
+        )
+
+    def _snapshot():
+        snapshot_mod.publish(args.db, dated=False)
+
+    stages = [
+        ("state-pull", _pull),
+        ("sync", _sync),
+        ("embed-analyze", _analyze),
+        ("tier1", _tier1),
+        ("state-push", _push),
+        ("snapshot", _snapshot),
+    ]
+    if args.dry_run:
+        for name, _ in stages:
+            print(f"would run: {name}")
+        return 0
+    res = steady_state.run(stages)
+    return 1 if res["failed"] else 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -203,6 +444,100 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_st.add_argument("--db", default=DEFAULT_DB)
     p_st.set_defaults(func=_cmd_analyze_status)
+
+    p_exec = sub.add_parser(
+        "execute", help="apply approved decisions (dry-run by default)"
+    )
+    p_exec.add_argument("--db", default=None)
+    p_exec.add_argument("--decisions-dir", default=None)
+    p_exec.add_argument("--proposals-dir", default=None)
+    p_exec.add_argument("--results-dir", default=None)
+    p_exec.add_argument("--labels", default=".github/triage/labels.yaml")
+    p_exec.add_argument("--templates", default="config/templates")
+    p_exec.add_argument("--repo", help="only decisions for this owner/name")
+    p_exec.add_argument("--limit", type=int, help="max decisions this run")
+    p_exec.add_argument(
+        "--apply", action="store_true", help="perform mutations (default: dry-run)"
+    )
+    p_exec.add_argument(
+        "--auto", action="store_true", help="auto-approve promoted proposals"
+    )
+    p_exec.add_argument(
+        "--autonomy",
+        default="config/autonomy.yaml",
+        help="path to autonomy config (default: config/autonomy.yaml)",
+    )
+    p_exec.set_defaults(func=_cmd_execute)
+
+    p_undo = sub.add_parser(
+        "undo", help="reverse an executed batch (dry-run by default)"
+    )
+    p_undo.add_argument("--db", default=None)
+    p_undo.add_argument("--results-dir", default=None)
+    p_undo.add_argument("--batch", required=True, help="batch id to reverse")
+    p_undo.add_argument("--issue", help="restrict to one issue, e.g. owner/name#7")
+    p_undo.add_argument(
+        "--apply", action="store_true", help="perform mutations (default: dry-run)"
+    )
+    p_undo.set_defaults(func=_cmd_undo)
+
+    p_state = sub.add_parser("state", help="sync state bus via git")
+    state_sub = p_state.add_subparsers(dest="state_command", required=True)
+
+    p_pull = state_sub.add_parser("pull", help="pull state from remote branch")
+    p_pull.add_argument("--branch", default="triage-state")
+    p_pull.add_argument("--data-dir", default=".data")
+    p_pull.set_defaults(func=_cmd_state_pull)
+
+    p_push = state_sub.add_parser("push", help="push state to remote branch")
+    p_push.add_argument("--branch", default="triage-state")
+    p_push.add_argument("--data-dir", default=".data")
+    p_push.add_argument("--db", default=DEFAULT_DB)
+    p_push.add_argument("--config", default=DEFAULT_CONFIG)
+    p_push.set_defaults(func=_cmd_state_push)
+
+    p_t1 = sub.add_parser("tier1", help="run tier-1 'already fixed?' sessions")
+    p_t1.add_argument("--db", default=DEFAULT_DB)
+    p_t1.add_argument("--config", default=DEFAULT_CONFIG)
+    p_t1.add_argument("--models-config", default=DEFAULT_MODELS)
+    p_t1.add_argument("--repo")
+    p_t1.add_argument("--proposals-dir", default=DEFAULT_PROPOSALS)
+    p_t1.set_defaults(func=_cmd_tier1)
+
+    p_t2 = sub.add_parser("tier2", help="label an issue for AI draft-PR fix")
+    p_t2.add_argument("issue", help="owner/repo#N")
+    p_t2.add_argument("--model", choices=["sonnet", "opus"], default="sonnet")
+    p_t2.set_defaults(func=_cmd_tier2)
+
+    p_ss = sub.add_parser("steady-state", help="run full steady-state loop")
+    p_ss.add_argument("--db", default=os.environ.get("TRIAGE_VERSE_DB", DEFAULT_DB))
+    p_ss.add_argument("--config", default=DEFAULT_CONFIG)
+    p_ss.add_argument("--models-config", default=DEFAULT_MODELS)
+    p_ss.add_argument("--proposals-dir", default=DEFAULT_PROPOSALS)
+    p_ss.add_argument("--data-dir", default=".data")
+    p_ss.add_argument("--branch", default="triage-state")
+    p_ss.add_argument("--no-tier1", action="store_true", help="skip tier-1 stage")
+    p_ss.add_argument(
+        "--dry-run", action="store_true", help="list stages without running"
+    )
+    p_ss.set_defaults(
+        func=_cmd_steady_state, repo=None, limit=None, full=False, wait=True
+    )
+
+    p_auto = sub.add_parser("autonomy", help="graduated autonomy tools")
+    auto_sub = p_auto.add_subparsers(dest="autonomy_command", required=True)
+
+    p_auto_st = auto_sub.add_parser(
+        "status", help="show per-category precision and promotion"
+    )
+    p_auto_st.add_argument("--decisions-dir", default=".data/decisions")
+    p_auto_st.add_argument("--results-dir", default=".data/results")
+    p_auto_st.add_argument("--models-config", default=DEFAULT_MODELS)
+    p_auto_st.add_argument("--out", default="config/autonomy.yaml")
+    p_auto_st.add_argument(
+        "--write", action="store_true", help="write config/autonomy.yaml"
+    )
+    p_auto_st.set_defaults(func=_cmd_autonomy_status)
 
     return parser
 
