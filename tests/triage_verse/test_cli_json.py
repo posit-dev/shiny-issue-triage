@@ -2,6 +2,7 @@ import json
 
 from triage_verse import analyze as analyze_mod
 from triage_verse import cli
+from triage_verse import executor as executor_mod
 from triage_verse import sync as sync_mod
 from triage_verse import tier2
 from triage_verse import verify as verify_mod
@@ -256,3 +257,17 @@ def test_tier2_bad_ref_json_error(capsys):
     assert rc == 1
     doc = json.loads(capsys.readouterr().out)
     assert doc["ok"] is False and "not-a-ref" in doc["error"]
+
+
+def test_execute_json_error_count_is_ok_true_exit_1(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(
+        executor_mod,
+        "execute",
+        lambda con, **kw: {"batch_id": "b1", "counts": {"applied": 3, "error": 1}},
+    )
+    rc = cli.main(["execute", "--json", "--db", str(tmp_path / "m.sqlite")])
+    assert rc == 1
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["ok"] is True
+    assert doc["exit_code"] == 1
+    assert doc["data"] == {"batch_id": "b1", "counts": {"applied": 3, "error": 1}}

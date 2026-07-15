@@ -214,6 +214,7 @@ def _cmd_execute(args: argparse.Namespace) -> int:
     args.results_dir = _env_default(
         args.results_dir, "TRIAGE_VERSE_RESULTS", ".data/results"
     )
+    out = args._out
     con = _open_db(args.db)
     summary = executor_mod.execute(
         con,
@@ -229,8 +230,8 @@ def _cmd_execute(args: argparse.Namespace) -> int:
         repo=args.repo,
         limit=args.limit,
     )
-    print(f"batch {summary['batch_id']}: {summary['counts']}")
-    return 1 if summary["counts"]["error"] else 0
+    rc = 1 if summary["counts"]["error"] else 0
+    return out.emit(summary, f"batch {summary['batch_id']}: {summary['counts']}", exit_code=rc)
 
 
 def _run_git(args, *, cwd=None):
@@ -298,6 +299,7 @@ def _cmd_undo(args: argparse.Namespace) -> int:
     args.results_dir = _env_default(
         args.results_dir, "TRIAGE_VERSE_RESULTS", ".data/results"
     )
+    out = args._out
     con = _open_db(args.db)
     summary = executor_mod.undo(
         con,
@@ -307,8 +309,8 @@ def _cmd_undo(args: argparse.Namespace) -> int:
         run_gh=gh.run_gh,
         apply=args.apply,
     )
-    print(f"batch {summary['batch_id']}: {summary['counts']}")
-    return 1 if summary["counts"]["error"] else 0
+    rc = 1 if summary["counts"]["error"] else 0
+    return out.emit(summary, f"batch {summary['batch_id']}: {summary['counts']}", exit_code=rc)
 
 
 def _cmd_tier1(args: argparse.Namespace) -> int:
