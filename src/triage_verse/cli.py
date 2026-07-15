@@ -148,6 +148,7 @@ def _cmd_verify_counts(args: argparse.Namespace) -> int:
 
 
 def _cmd_embed(args: argparse.Namespace) -> int:
+    out = args._out
     cfg = config.load_models_config(args.models_config)
     repos = [r.full for r in config.load_repos(args.config)]
     if args.repo:
@@ -155,12 +156,12 @@ def _cmd_embed(args: argparse.Namespace) -> int:
     con = _open_db(args.db)
     embedder = embed_mod.FastEmbedEmbedder(cfg.embed_model)
     total = sum(embed_mod.embed_repo(con, r, embedder, full=args.full) for r in repos)
-    print(f"embedded {total} issues")
-    return 0
+    return out.emit({"embedded": total}, f"embedded {total} issues")
 
 
-def _run_analyze(args: argparse.Namespace) -> None:
-    """Shared analyze logic used by both the `analyze` command and `steady-state`."""
+def _run_analyze(args: argparse.Namespace) -> dict:
+    """Shared analyze logic used by both `analyze` and `steady-state`; returns the summary."""
+    out = args._out
     cfg = config.load_models_config(args.models_config)
     con = _open_db(args.db)
     embedder = embed_mod.FastEmbedEmbedder(cfg.embed_model)
@@ -172,21 +173,22 @@ def _run_analyze(args: argparse.Namespace) -> None:
         full=args.full,
         wait=args.wait,
         embedder=embedder,
-        batch_client=llm.make_batch_client(cfg, log=print),
+        batch_client=llm.make_batch_client(cfg, log=out.log),
         rubric_path=".github/triage/issue-triage-rubric.md",
         labels_path=".github/triage/labels.yaml",
         proposals_dir=args.proposals_dir,
-        log=print,
+        log=out.log,
     )
-    print(
-        f"classified={summary['classified']} rechecked={summary['rechecked']} "
-        f"pairs={summary['pairs']} halted_on_budget={summary['halted_on_budget']}"
-    )
+    return summary
 
 
 def _cmd_analyze(args: argparse.Namespace) -> int:
-    _run_analyze(args)
-    return 0
+    summary = _run_analyze(args)
+    human = (
+        f"classified={summary['classified']} rechecked={summary['rechecked']} "
+        f"pairs={summary['pairs']} halted_on_budget={summary['halted_on_budget']}"
+    )
+    return args._out.emit(summary, human)
 
 
 def _cmd_analyze_status(args: argparse.Namespace) -> int:
@@ -310,6 +312,7 @@ def _cmd_undo(args: argparse.Namespace) -> int:
 
 
 def _cmd_tier1(args: argparse.Namespace) -> int:
+    out = args._out
     con = _open_db(args.db)
     repos = (
         [args.repo] if args.repo else [r.full for r in config.load_repos(args.config)]
@@ -320,27 +323,32 @@ def _cmd_tier1(args: argparse.Namespace) -> int:
     res = tier1.run(
         con, repos, cfg=cfg, proposals_dir=args.proposals_dir, run_gh=gh.run_gh
     )
-    print(
+    human = (
         f"tier1: {res['sessions']} sessions, {res['proposals']} close proposals"
         f"{' (halted on budget)' if res['halted_on_budget'] else ''}"
     )
-    return 0
+    return out.emit(res, human)
 
 
 def _cmd_tier2(args: argparse.Namespace) -> int:
+    out = args._out
     from . import executor, tier2
 
     ref = executor.parse_issue_ref(args.issue, default_repo="")
     if ref is None:
-        print(f"error: cannot parse issue ref {args.issue!r}")
-        return 1
+        return out.fail(f"cannot parse issue ref {args.issue!r}")
     tier2.request_fix(ref[0], ref[1], run_gh=gh.run_gh)
-    print(f"labeled {ref[0]}#{ref[1]} with {tier2.LABEL}")
-    print(
-        f"kick off the fix: gh workflow run tier2-fix.yml -f issue={args.issue}"
-        f" -f model={args.model}"
+    workflow_hint = (
+        f"gh workflow run tier2-fix.yml -f issue={args.issue} -f model={args.model}"
     )
-    return 0
+    data = {
+        "repo": ref[0],
+        "number": ref[1],
+        "label": tier2.LABEL,
+        "workflow_hint": workflow_hint,
+    }
+    human = f"labeled {ref[0]}#{ref[1]} with {tier2.LABEL}\nkick off the fix: {workflow_hint}"
+    return out.emit(data, human)
 
 
 def _cmd_autonomy_status(args: argparse.Namespace) -> int:

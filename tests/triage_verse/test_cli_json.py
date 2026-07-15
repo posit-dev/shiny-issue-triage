@@ -188,3 +188,25 @@ def test_analyze_status_json(tmp_path, monkeypatch, capsys):
     assert rc == 0
     doc = json.loads(capsys.readouterr().out)
     assert doc["data"] == {"open_batches": [], "today_spend_usd": 1.25}
+
+
+from triage_verse import embed as embed_mod
+
+
+def test_tier2_json(tmp_path, monkeypatch, capsys):
+    from triage_verse import tier2, gh
+
+    monkeypatch.setattr(tier2, "request_fix", lambda repo, number, *, run_gh: None)
+    rc = cli.main(["tier2", "--json", "rstudio/shiny#7"])
+    assert rc == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["data"]["repo"] == "rstudio/shiny"
+    assert doc["data"]["number"] == 7
+    assert doc["data"]["label"] == tier2.LABEL
+
+
+def test_tier2_bad_ref_json_error(capsys):
+    rc = cli.main(["tier2", "--json", "not-a-ref"])
+    assert rc == 1
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["ok"] is False and "not-a-ref" in doc["error"]
