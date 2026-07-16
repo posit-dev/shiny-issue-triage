@@ -4,6 +4,7 @@ from triage_verse import analytics as analytics_mod
 from triage_verse import analyze as analyze_mod
 from triage_verse import cli
 from triage_verse import executor as executor_mod
+from triage_verse import gh as gh_mod
 from triage_verse import snapshot as snapshot_mod
 from triage_verse import sync as sync_mod
 from triage_verse import tier2
@@ -451,3 +452,19 @@ def test_proposals_prune_valid_id_json_error(tmp_path, capsys):
     doc = json.loads(capsys.readouterr().out)
     assert doc["ok"] is False
     assert "valid module id" in doc["error"]
+
+
+def test_tier2_egress_refused_renders_json_error_envelope(monkeypatch, capsys):
+    # The credential-egress guard (gh.EgressRefused) is a new error surface;
+    # under --json it must become an ok:false envelope, not a bare traceback.
+    def refuse(repo, number, *, run_gh, label=tier2.LABEL):
+        raise gh_mod.EgressRefused("refused non-allowlisted gh call")
+
+    monkeypatch.setattr(tier2, "request_fix", refuse)
+    rc = cli.main(["tier2", "--json", "rstudio/shiny#7"])
+    assert rc == 1
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["command"] == "tier2"
+    assert doc["ok"] is False
+    assert doc["exit_code"] == 1
+    assert "refused" in doc["error"]
