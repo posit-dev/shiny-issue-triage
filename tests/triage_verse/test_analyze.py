@@ -494,3 +494,33 @@ def test_synchronous_client_persists_each_item_before_next(tmp_path):
     rows = con.execute("SELECT status FROM batches WHERE stage='classify'").fetchall()
     assert len(rows) == 3
     assert all(r["status"] == "collected" for r in rows)
+
+
+def test_rate_limited_result_halts_sequential_stage_and_requeues(tmp_path):
+    # A rate limit on the 2nd classify item halts the stage: the 1st item is
+    # classified, the 3rd is never submitted, and the halt is reported without
+    # writing proposals (the run is left to resume next invocation).
+    con = db.connect(tmp_path / "m.sqlite")
+    _n_issues(con, 3)
+    scripted = {
+        "c0": {"status": "succeeded", "payload": _clf(0.9)},
+        "c1": {"status": "rate_limited"},
+        "c2": {"status": "succeeded", "payload": _clf(0.9)},
+    }
+    client = _SyncFakeClient(scripted)
+    summary = analyze.analyze(
+        con,
+        _cfg(),
+        embedder=embed.FakeEmbedder(db.VEC_DIM),
+        batch_client=client,
+        rubric_path=RUBRIC,
+        labels_path=LABELS,
+        proposals_dir=tmp_path / "proposals",
+        wait=True,
+        sleep=lambda s: None,
+    )
+    assert summary["halted_on_rate_limit"] is True
+    assert summary["classified"] == 1
+    assert con.execute("SELECT COUNT(*) FROM classifications").fetchone()[0] == 1
+    # finalization skipped -> no proposals dir created
+    assert not (tmp_path / "proposals").exists()

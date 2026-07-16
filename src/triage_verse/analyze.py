@@ -33,7 +33,13 @@ def analyze(
     run_id = open_now[0]["run_id"] if open_now else db.start_run(con, "analyze")
     allowed = prompts.allowed_labels(labels_path)
     _reconcile_orphaned_sync_batches(con, batch_client, log)
-    summary = {"classified": 0, "rechecked": 0, "pairs": 0, "halted_on_budget": False}
+    summary = {
+        "classified": 0,
+        "rechecked": 0,
+        "pairs": 0,
+        "halted_on_budget": False,
+        "halted_on_rate_limit": False,
+    }
 
     # Stage 0: embed (local).
     log("stage: embed - starting")
@@ -63,7 +69,8 @@ def analyze(
 
     # --- Wave 1: classify + dedup (only if not already submitted for this run) ---
     if not _stage_started(con, run_id, "classify"):
-        if (
+        _apply_halt(
+            summary,
             _submit_stage(
                 con,
                 cfg,
@@ -82,12 +89,11 @@ def analyze(
                 allowed=allowed,
                 summary=summary,
                 log=log,
-            )
-            is False
-        ):
-            summary["halted_on_budget"] = True
-    if not summary["halted_on_budget"] and not _stage_started(con, run_id, "dedup"):
-        if (
+            ),
+        )
+    if not _is_halted(summary) and not _stage_started(con, run_id, "dedup"):
+        _apply_halt(
+            summary,
             _submit_stage(
                 con,
                 cfg,
@@ -108,10 +114,8 @@ def analyze(
                 allowed=allowed,
                 summary=summary,
                 log=log,
-            )
-            is False
-        ):
-            summary["halted_on_budget"] = True
+            ),
+        )
 
     _collect(con, cfg, run_id, batch_client, allowed, summary, issues, pairs, log)
 
@@ -121,7 +125,7 @@ def analyze(
 
     def maybe_recheck():
         nonlocal recheck_waiting_logged, recheck_skip_logged
-        if summary["halted_on_budget"]:
+        if _is_halted(summary):
             return
         if not _stage_collected(con, run_id, "classify"):
             if not recheck_waiting_logged:
@@ -136,7 +140,8 @@ def analyze(
                 log("stage: recheck - skipped (nothing needs rechecking)")
                 recheck_skip_logged = True
             return
-        if (
+        _apply_halt(
+            summary,
             _submit_stage(
                 con,
                 cfg,
@@ -156,10 +161,8 @@ def analyze(
                 allowed=allowed,
                 summary=summary,
                 log=log,
-            )
-            is False
-        ):
-            summary["halted_on_budget"] = True
+            ),
+        )
 
     maybe_recheck()
     _collect(con, cfg, run_id, batch_client, allowed, summary, issues, pairs, log)
@@ -180,7 +183,7 @@ def analyze(
                 con, cfg, run_id, batch_client, allowed, summary, issues, pairs, log
             )
 
-    if not db.open_batches(con) and not summary["halted_on_budget"]:
+    if not db.open_batches(con) and not _is_halted(summary):
         records = proposals.build(con, run_id)
         if records:
             proposals.write(records, proposals_dir)
@@ -266,20 +269,43 @@ def _stage_collected(con, run_id, stage) -> bool:
     return bool(rows) and all(b["status"] == "collected" for b in rows)
 
 
+# _submit_stage / _submit_stage_parallel return one of these. None means the
+# stage completed (or had nothing to do); the strings mark why dispatch stopped.
+_HALT_LOG = {
+    None: "done",
+    "budget": "halted on budget",
+    "rate_limit": "halted on rate limit",
+    # Legacy compat: _submit_stage_parallel still returns bool until Task 5.
+    True: "done",
+    False: "halted on budget",
+}
+
+
+def _is_halted(summary) -> bool:
+    return summary["halted_on_budget"] or summary["halted_on_rate_limit"]
+
+
+def _apply_halt(summary, halt) -> None:
+    if halt == "budget":
+        summary["halted_on_budget"] = True
+    elif halt == "rate_limit":
+        summary["halted_on_rate_limit"] = True
+
+
 def _submit_stage(
     con, cfg, run_id, stage, client, requests, targets, allowed, summary, log
 ):
     if not requests:
         log(f"stage: {stage} - skipped (nothing to do)")
-        return True
+        return None
     log(f"stage: {stage} - starting ({len(requests)} item(s))")
     synchronous = getattr(client, "synchronous", False)
     if synchronous and cfg.workers > 1:
-        result = _submit_stage_parallel(
+        halt = _submit_stage_parallel(
             con, cfg, run_id, stage, client, requests, targets, allowed, summary, log
         )
-        log(f"stage: {stage} - {'done' if result else 'halted on budget'}")
-        return result
+        log(f"stage: {stage} - {_HALT_LOG[halt]}")
+        return halt
     chunk_size = 1 if synchronous else cfg.max_requests_per_batch
     total = len(requests)
     done = 0
@@ -289,7 +315,7 @@ def _submit_stage(
                 f"budget reached; not submitting more {stage} batches ({done}/{total} done)"
             )
             log(f"stage: {stage} - halted on budget")
-            return False
+            return "budget"
         chunk = requests[start : start + chunk_size]
         chunk_targets = targets[start : start + chunk_size]
         provider_id = client.submit(chunk)
@@ -303,16 +329,30 @@ def _submit_stage(
             batch_row = con.execute(
                 "SELECT * FROM batches WHERE batch_id=?", (batch_id,)
             ).fetchone()
-            if _try_collect_batch(
+            collected = _try_collect_batch(
                 con, cfg, run_id, client, allowed, summary, batch_row, log
-            ):
+            )
+            rate_limited = any(
+                r.status == "rate_limited" for r in client.results(provider_id)
+            )
+            if collected and not rate_limited:
                 done += len(chunk)
                 log(f"  {stage} progress: {done}/{total}")
+            if rate_limited:
+                # A sustained rate limit: stop submitting more items this run.
+                # The rate-limited item stored no proposal (parse returns None
+                # for non-succeeded), so it re-queues on the next run.
+                log(
+                    f"rate limit reached; not submitting more {stage} batches "
+                    f"({done}/{total} done)"
+                )
+                log(f"stage: {stage} - halted on rate limit")
+                return "rate_limit"
     if synchronous:
         log(f"stage: {stage} - done")
     else:
         log(f"stage: {stage} - submitted, awaiting async completion")
-    return True
+    return None
 
 
 def _submit_stage_parallel(
