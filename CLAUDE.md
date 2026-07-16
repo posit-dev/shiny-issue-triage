@@ -67,6 +67,15 @@ Flow: **sync → embed → analyze → (human review) → execute → undo?**, w
 - **execute** (`executor.py`) applies approved decisions to GitHub (dry-run by
   default; `--apply` to mutate), freshness-checking each issue and appending
   outcomes to `.data/results/`. **undo** reverses a batch.
+- **egress guard** (`gh.py`): every credentialed GitHub call funnels through
+  `gh.run_gh`, which **fails closed** — it allows recognized reads and a bounded
+  trusted-infra `release` category, and refuses everything else. All
+  issue-mutating **writes** go through `gh.gh_mutation` (a single GraphQL
+  transport) and must pass an operation-name allowlist, a wire-field allowlist
+  parsed from the query, and a declared-repo check against `config/repos.yaml`.
+  Add new writes via `gh.gh_mutation`/`gh.add_issue_label`; porcelain and REST
+  writes (`gh issue edit`, `gh api -X POST …`) are intentionally refused, so a
+  new write call site fails closed rather than bypassing the guard.
 - **autonomy** (`autonomy.py`) tracks per-category precision from reviewed
   decisions and graduates categories into `config/autonomy.yaml`;
   `execute --auto` then auto-approves those categories with sampled spot audits.

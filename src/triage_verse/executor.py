@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+from . import gh as gh_mod
 from . import jsonl_log, prompts, review_queue
 from . import templates as templates_mod
 
@@ -214,81 +215,85 @@ def _describe(mutation: dict) -> str:
     )
 
 
+_CLOSE_STATE_REASON = {"completed": "COMPLETED", "not planned": "NOT_PLANNED"}
+
+_ADD_LABELS = gh_mod.ADD_LABELS_MUTATION
+_REMOVE_LABELS = gh_mod.REMOVE_LABELS_MUTATION
+_ADD_COMMENT = (
+    "mutation($id: ID!, $body: String!) { addComment(input: {subjectId: $id,"
+    " body: $body}) { commentEdge { node { databaseId } } } }"
+)
+_CLOSE_ISSUE = (
+    "mutation($id: ID!, $reason: IssueClosedStateReason) { closeIssue("
+    "input: {issueId: $id, stateReason: $reason}) { issue { id } } }"
+)
+_CLOSE_DUPLICATE = (
+    "mutation($id: ID!, $dup: ID!) { closeIssue(input: {issueId: $id,"
+    " stateReason: DUPLICATE, duplicateIssueId: $dup}) { issue { id } } }"
+)
+_REOPEN_ISSUE = (
+    "mutation($id: ID!) { reopenIssue(input: {issueId: $id}) { issue { id } } }"
+)
+_DELETE_COMMENT = (
+    "mutation($id: ID!) { deleteIssueComment(input: {id: $id}) { clientMutationId } }"
+)
+
+
+def _comment_node_id(run_gh: RunGh, repo: str, comment_id: int) -> str:
+    out = run_gh(["api", f"repos/{repo}/issues/comments/{comment_id}"])
+    return json.loads(out)["node_id"]
+
+
 def _apply_mutation(
     run_gh: RunGh, repo: str, number: int, node_id: str, mutation: dict
 ) -> int | None:
-    """Perform one mutation; returns the created comment id, if any."""
+    """Perform one mutation via guarded GraphQL; returns comment databaseId if any."""
     kind = mutation["kind"]
     if kind == "add-label":
-        run_gh(
-            [
-                "issue",
-                "edit",
-                str(number),
-                "--repo",
-                repo,
-                "--add-label",
-                mutation["label"],
-            ]
+        label_id = gh_mod.label_node_id(repo, mutation["label"], run_gh=run_gh)
+        gh_mod.gh_mutation(
+            "addLabelsToIssue",
+            _ADD_LABELS,
+            {"id": node_id, "labels": [label_id]},
+            repos=[repo],
         )
     elif kind == "remove-label":
-        run_gh(
-            [
-                "issue",
-                "edit",
-                str(number),
-                "--repo",
-                repo,
-                "--remove-label",
-                mutation["label"],
-            ]
+        label_id = gh_mod.label_node_id(repo, mutation["label"], run_gh=run_gh)
+        gh_mod.gh_mutation(
+            "removeLabelsFromIssue",
+            _REMOVE_LABELS,
+            {"id": node_id, "labels": [label_id]},
+            repos=[repo],
         )
     elif kind == "comment":
-        out = run_gh(
-            [
-                "api",
-                f"repos/{repo}/issues/{number}/comments",
-                "-f",
-                f"body={mutation['body']}",
-            ]
+        data = gh_mod.gh_mutation(
+            "addComment",
+            _ADD_COMMENT,
+            {"id": node_id, "body": mutation["body"]},
+            repos=[repo],
         )
-        return json.loads(out)["id"]
+        return data["addComment"]["commentEdge"]["node"]["databaseId"]
     elif kind == "close":
-        run_gh(
-            [
-                "issue",
-                "close",
-                str(number),
-                "--repo",
-                repo,
-                "--reason",
-                mutation["reason"],
-            ]
+        gh_mod.gh_mutation(
+            "closeIssue",
+            _CLOSE_ISSUE,
+            {"id": node_id, "reason": _CLOSE_STATE_REASON[mutation["reason"]]},
+            repos=[repo],
         )
     elif kind == "close-duplicate":
         dup_repo, dup_number = mutation["canonical"]
         dup = _fetch_issue(run_gh, dup_repo, dup_number)
-        query = (
-            "mutation($issue: ID!, $dup: ID!) { closeIssue(input: {"
-            "issueId: $issue, stateReason: DUPLICATE, duplicateIssueId: $dup"
-            "}) { issue { id } } }"
-        )
-        run_gh(
-            [
-                "api",
-                "graphql",
-                "-f",
-                f"query={query}",
-                "-f",
-                f"issue={node_id}",
-                "-f",
-                f"dup={dup['node_id']}",
-            ]
+        gh_mod.gh_mutation(
+            "closeIssue",
+            _CLOSE_DUPLICATE,
+            {"id": node_id, "dup": dup["node_id"]},
+            repos=[repo],
         )
     return None
 
 
-_MIRROR_STATE_REASON = {"completed": "COMPLETED", "not planned": "NOT_PLANNED"}
+# Same GitHub → mirror mapping used when closing an issue (see _CLOSE_STATE_REASON).
+_MIRROR_STATE_REASON = _CLOSE_STATE_REASON
 
 
 def _update_mirror(
@@ -500,18 +505,20 @@ def _reverse_mutations(rec: dict) -> list[dict]:
 def _apply_reverse(run_gh: RunGh, repo: str, number: int, mutation: dict) -> None:
     kind = mutation["kind"]
     if kind in ("add-label", "remove-label"):
-        _apply_mutation(run_gh, repo, number, "", mutation)
+        node_id = json.loads(run_gh(["api", f"repos/{repo}/issues/{number}"]))[
+            "node_id"
+        ]
+        _apply_mutation(run_gh, repo, number, node_id, mutation)
     elif kind == "delete-comment":
-        run_gh(
-            [
-                "api",
-                "-X",
-                "DELETE",
-                f"repos/{repo}/issues/comments/{mutation['comment_id']}",
-            ]
+        comment_node = _comment_node_id(run_gh, repo, mutation["comment_id"])
+        gh_mod.gh_mutation(
+            "deleteIssueComment", _DELETE_COMMENT, {"id": comment_node}, repos=[repo]
         )
     elif kind == "reopen":
-        run_gh(["issue", "reopen", str(number), "--repo", repo])
+        node_id = json.loads(run_gh(["api", f"repos/{repo}/issues/{number}"]))[
+            "node_id"
+        ]
+        gh_mod.gh_mutation("reopenIssue", _REOPEN_ISSUE, {"id": node_id}, repos=[repo])
 
 
 def _describe_reverse(mutation: dict) -> str:
