@@ -65,11 +65,12 @@ def _fake(issues=None):
     return FakeGh(issues or {("o/r", 1): base})
 
 
-def test_dry_run_writes_records_and_never_mutates(tmp_path):
+def test_dry_run_writes_records_and_never_mutates(tmp_path, gh_relay):
     con, dirs = _setup(
         tmp_path, [_proposal("p1", "add-label", {"label": "regression"})], ["approved"]
     )
     gh = _fake()
+    gh_relay.install(gh)
     lines = []
     summary = executor.execute(
         con, run_gh=gh, apply=False, pace=lambda s: None, log=lines.append, **dirs
@@ -88,11 +89,12 @@ def test_dry_run_writes_records_and_never_mutates(tmp_path):
     assert any("add-label" in line for line in lines)
 
 
-def test_apply_add_label_updates_github_results_and_mirror(tmp_path):
+def test_apply_add_label_updates_github_results_and_mirror(tmp_path, gh_relay):
     con, dirs = _setup(
         tmp_path, [_proposal("p1", "add-label", {"label": "regression"})], ["approved"]
     )
     gh = _fake()
+    gh_relay.install(gh)
     executor.execute(
         con, run_gh=gh, apply=True, pace=lambda s: None, log=lambda *a: None, **dirs
     )
@@ -103,11 +105,12 @@ def test_apply_add_label_updates_github_results_and_mirror(tmp_path):
     assert json.loads(row["labels_json"]) == ["regression"]
 
 
-def test_apply_close_posts_template_comment_then_closes(tmp_path):
+def test_apply_close_posts_template_comment_then_closes(tmp_path, gh_relay):
     con, dirs = _setup(
         tmp_path, [_proposal("p1", "close", {"reason": "fixed"})], ["approved"]
     )
     gh = _fake()
+    gh_relay.install(gh)
     executor.execute(
         con, run_gh=gh, apply=True, pace=lambda s: None, log=lambda *a: None, **dirs
     )
@@ -122,7 +125,7 @@ def test_apply_close_posts_template_comment_then_closes(tmp_path):
     assert row["state"] == "CLOSED" and row["state_reason"] == "COMPLETED"
 
 
-def test_apply_close_duplicate_uses_graphql_duplicate_close(tmp_path):
+def test_apply_close_duplicate_uses_graphql_duplicate_close(tmp_path, gh_relay):
     con, dirs = _setup(
         tmp_path,
         [
@@ -152,6 +155,7 @@ def test_apply_close_duplicate_uses_graphql_duplicate_close(tmp_path):
             },
         }
     )
+    gh_relay.install(gh)
     executor.execute(
         con, run_gh=gh, apply=True, pace=lambda s: None, log=lambda *a: None, **dirs
     )
@@ -161,7 +165,7 @@ def test_apply_close_duplicate_uses_graphql_duplicate_close(tmp_path):
     assert row["state"] == "CLOSED" and row["state_reason"] == "DUPLICATE"
 
 
-def test_stale_issue_bounces_without_mutation(tmp_path):
+def test_stale_issue_bounces_without_mutation(tmp_path, gh_relay):
     con, dirs = _setup(
         tmp_path, [_proposal("p1", "close", {"reason": "fixed"})], ["approved"]
     )
@@ -176,6 +180,7 @@ def test_stale_issue_bounces_without_mutation(tmp_path):
             }
         }
     )
+    gh_relay.install(gh)
     summary = executor.execute(
         con, run_gh=gh, apply=True, pace=lambda s: None, log=lambda *a: None, **dirs
     )
@@ -185,7 +190,7 @@ def test_stale_issue_bounces_without_mutation(tmp_path):
     assert rec["status"] == "stale-needs-rereview"
 
 
-def test_error_records_continue_the_batch(tmp_path):
+def test_error_records_continue_the_batch(tmp_path, gh_relay):
     con, dirs = _setup(
         tmp_path,
         [
@@ -212,6 +217,7 @@ def test_error_records_continue_the_batch(tmp_path):
             },
         }
     )
+    gh_relay.install(gh)
     summary = executor.execute(
         con, run_gh=gh, apply=True, pace=lambda s: None, log=lambda *a: None, **dirs
     )
@@ -220,11 +226,12 @@ def test_error_records_continue_the_batch(tmp_path):
     assert gh.issues[("o/r", 2)]["labels"] == ["regression"]
 
 
-def test_rerun_after_apply_skips_finalized_decisions(tmp_path):
+def test_rerun_after_apply_skips_finalized_decisions(tmp_path, gh_relay):
     con, dirs = _setup(
         tmp_path, [_proposal("p1", "add-label", {"label": "regression"})], ["approved"]
     )
     gh = _fake()
+    gh_relay.install(gh)
     executor.execute(
         con, run_gh=gh, apply=True, pace=lambda s: None, log=lambda *a: None, **dirs
     )
@@ -241,7 +248,9 @@ def test_rerun_after_apply_skips_finalized_decisions(tmp_path):
     }
 
 
-def test_records_are_written_incrementally_per_decision(tmp_path, monkeypatch):
+def test_records_are_written_incrementally_per_decision(
+    tmp_path, monkeypatch, gh_relay
+):
     con, dirs = _setup(
         tmp_path,
         [
@@ -268,6 +277,7 @@ def test_records_are_written_incrementally_per_decision(tmp_path, monkeypatch):
             },
         }
     )
+    gh_relay.install(gh)
     real_append_weekly = jsonl_log.append_weekly
     calls = []
 
@@ -286,7 +296,7 @@ def test_records_are_written_incrementally_per_decision(tmp_path, monkeypatch):
     assert len(results) == 2
 
 
-def test_repo_filter_and_limit(tmp_path):
+def test_repo_filter_and_limit(tmp_path, gh_relay):
     con, dirs = _setup(
         tmp_path,
         [
@@ -313,6 +323,7 @@ def test_repo_filter_and_limit(tmp_path):
             },
         }
     )
+    gh_relay.install(gh)
     summary = executor.execute(
         con,
         run_gh=gh,

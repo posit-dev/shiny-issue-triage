@@ -65,13 +65,14 @@ def _run_batch(tmp_path, proposal_records, gh):
     return con, dirs, summary["batch_id"]
 
 
-def test_undo_round_trip_restores_labels_state_and_comments(tmp_path):
+def test_undo_round_trip_restores_labels_state_and_comments(tmp_path, gh_relay):
     gh = FakeGh(
         {
             ("o/r", 1): _issue(labels=["Priority: Low", "bug"]),
             ("o/r", 2): _issue(node="N2"),
         }
     )
+    gh_relay.install(gh)
     con, dirs, batch_id = _run_batch(
         tmp_path,
         [
@@ -101,8 +102,9 @@ def test_undo_round_trip_restores_labels_state_and_comments(tmp_path):
     assert row["state"] == "OPEN" and row["state_reason"] is None
 
 
-def test_undo_dry_run_by_default(tmp_path):
+def test_undo_dry_run_by_default(tmp_path, gh_relay):
     gh = FakeGh({("o/r", 1): _issue()})
+    gh_relay.install(gh)
     con, dirs, batch_id = _run_batch(
         tmp_path, [_proposal("p1", "add-label", {"label": "regression"})], gh
     )
@@ -120,8 +122,9 @@ def test_undo_dry_run_by_default(tmp_path):
     assert gh.issues[("o/r", 1)]["labels"] == ["regression"]
 
 
-def test_undo_is_idempotent(tmp_path):
+def test_undo_is_idempotent(tmp_path, gh_relay):
     gh = FakeGh({("o/r", 1): _issue()})
+    gh_relay.install(gh)
     con, dirs, batch_id = _run_batch(
         tmp_path, [_proposal("p1", "add-label", {"label": "regression"})], gh
     )
@@ -147,9 +150,10 @@ def test_undo_is_idempotent(tmp_path):
     assert summary["counts"]["skipped"] == 1
 
 
-def test_undo_does_not_remove_preexisting_label(tmp_path):
+def test_undo_does_not_remove_preexisting_label(tmp_path, gh_relay):
     # add-label on an issue that already carried the label: undo must not strip it.
     gh = FakeGh({("o/r", 1): _issue(labels=["regression"])})
+    gh_relay.install(gh)
     con, dirs, batch_id = _run_batch(
         tmp_path, [_proposal("p1", "add-label", {"label": "regression"})], gh
     )
@@ -165,8 +169,9 @@ def test_undo_does_not_remove_preexisting_label(tmp_path):
     assert gh.issues[("o/r", 1)]["labels"] == ["regression"]
 
 
-def test_undo_issue_filter(tmp_path):
+def test_undo_issue_filter(tmp_path, gh_relay):
     gh = FakeGh({("o/r", 1): _issue(), ("o/r", 2): _issue(node="N2")})
+    gh_relay.install(gh)
     con, dirs, batch_id = _run_batch(
         tmp_path,
         [

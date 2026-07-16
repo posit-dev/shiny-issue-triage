@@ -11,10 +11,12 @@ from __future__ import annotations
 
 from typing import Callable
 
+from . import gh as gh_mod
+
 LABEL = "ai-triage:needs-reprex"
 
 
 def request_reprex(
     repo: str, number: int, *, run_gh: Callable[..., str], label: str = LABEL
 ) -> None:
-    run_gh(["issue", "edit", str(number), "--repo", repo, "--add-label", label])
+    gh_mod.add_issue_label(repo, number, label, run_gh=run_gh)
