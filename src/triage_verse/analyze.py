@@ -32,6 +32,7 @@ def analyze(
     open_now = db.open_batches(con)
     run_id = open_now[0]["run_id"] if open_now else db.start_run(con, "analyze")
     allowed = prompts.allowed_labels(labels_path)
+    _reconcile_orphaned_sync_batches(con, batch_client, log)
     summary = {"classified": 0, "rechecked": 0, "pairs": 0, "halted_on_budget": False}
 
     # Stage 0: embed (local).
@@ -186,6 +187,39 @@ def analyze(
         db.finish_run(con, run_id, summary)
         log(f"wrote {len(records)} proposal(s) to {proposals_dir}")
     return summary
+
+
+def _reconcile_orphaned_sync_batches(con, client, log):
+    """Drop `submitted` batches whose synchronous results didn't survive a restart.
+
+    The synchronous claude_cli backend executes work and keeps its results only
+    in memory. If a process is killed after `_submit_stage` commits a
+    `submitted` batch row but before that row is collected, the row survives the
+    crash while the results it points at die with the process. A fresh client
+    can't produce them, so collecting would raise KeyError (see #25).
+
+    Such work was never truly completed from any surviving process's view, so
+    drop the orphaned row and its items. The underlying issues still have no
+    stored classification, so they are re-queued on the next submit -- this run
+    if the stage has no other batch rows keeping it "started", otherwise the
+    next run (mirroring how a parallel crash recovers via clf_hash caching).
+
+    A no-op for async backends (whose provider ids persist server-side) and for
+    any client without a `recognizes` method.
+    """
+    recognizes = getattr(client, "recognizes", None)
+    if not getattr(client, "synchronous", False) or recognizes is None:
+        return
+    for batch in db.open_batches(con):
+        if recognizes(batch["provider_batch_id"]):
+            continue
+        db.delete_batch(con, batch["batch_id"])
+        con.commit()
+        log(
+            f"stage: {batch['stage']} - dropped orphaned batch {batch['batch_id']} "
+            f"(synchronous results lost to a restart); "
+            f"{batch['request_count']} item(s) re-queued"
+        )
 
 
 def _issues_to_classify(con, repo, limit):

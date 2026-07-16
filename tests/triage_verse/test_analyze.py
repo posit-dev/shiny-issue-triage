@@ -433,6 +433,46 @@ def test_parallel_resume_after_crash_does_not_redo_completed_items(tmp_path):
     assert summary["classified"] == 4 - completed_before
 
 
+def test_orphaned_synchronous_batch_is_requeued_after_restart(tmp_path):
+    # Reproduces #25: a `submitted` batch row survives a crash, but the
+    # synchronous claude_cli backend kept its results only in the dead
+    # process's memory. A fresh client doesn't recognize the provider id, so
+    # collecting it must not raise KeyError -- the batch is dropped and its
+    # issue re-queued.
+    con = db.connect(tmp_path / "m.sqlite")
+    _n_issues(con, 1)
+    run_id = db.start_run(con, "analyze")
+    batch_id = f"{run_id}:classify:0"
+    db.insert_batch(con, batch_id, run_id, "classify", "cli-dead", 1)
+    db.insert_batch_items(con, batch_id, {"c0": json.dumps(["r/a", 1])})
+    con.commit()
+
+    scripted = {"c0": {"status": "succeeded", "payload": _clf(0.9)}}
+    client = _SyncFakeClient(scripted)  # fresh instance: empty in-memory results
+    summary = analyze.analyze(
+        con,
+        _cfg(),
+        embedder=embed.FakeEmbedder(db.VEC_DIM),
+        batch_client=client,
+        rubric_path=RUBRIC,
+        labels_path=LABELS,
+        proposals_dir=tmp_path / "proposals",
+        wait=True,
+        sleep=lambda s: None,
+    )
+
+    # The orphaned row is gone and its issue was re-queued and classified this
+    # run (the classify stage had no other batch rows to keep it "started").
+    assert (
+        con.execute(
+            "SELECT COUNT(*) FROM batches WHERE provider_batch_id='cli-dead'"
+        ).fetchone()[0]
+        == 0
+    )
+    assert con.execute("SELECT COUNT(*) FROM classifications").fetchone()[0] == 1
+    assert summary["classified"] == 1
+
+
 def test_synchronous_client_persists_each_item_before_next(tmp_path):
     con = db.connect(tmp_path / "m.sqlite")
     _n_issues(con, 3)
