@@ -389,6 +389,13 @@ def set_batch(con: sqlite3.Connection, batch_id: str, **fields: object) -> None:
     )
 
 
+def delete_batch(con: sqlite3.Connection, batch_id: str) -> None:
+    """Remove a batch and its items. Used to drop an unrecoverable batch so
+    its issues fall back to needing (re)processing on the next submit."""
+    con.execute("DELETE FROM batch_items WHERE batch_id=?", (batch_id,))
+    con.execute("DELETE FROM batches WHERE batch_id=?", (batch_id,))
+
+
 def open_batches(con: sqlite3.Connection) -> list[sqlite3.Row]:
     return con.execute(
         "SELECT * FROM batches WHERE status='submitted' ORDER BY submitted_at"

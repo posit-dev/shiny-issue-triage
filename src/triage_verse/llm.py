@@ -88,6 +88,9 @@ class FakeBatchClient:
     def status(self, provider_id: str) -> str:
         return "ended"
 
+    def recognizes(self, provider_id: str) -> bool:
+        return provider_id in self._batches
+
     def results(self, provider_id: str) -> list[BatchResult]:
         out = []
         for cid in self._batches[provider_id]:
@@ -231,6 +234,19 @@ class ClaudeCliClient:
 
     def status(self, provider_id: str) -> str:
         return "ended"
+
+    def recognizes(self, provider_id: str) -> bool:
+        """Whether this instance holds results for provider_id.
+
+        This backend keeps results only in memory (`self._batches`), so a
+        freshly constructed instance -- e.g. after a process restart --
+        recognizes none of the provider ids a prior process submitted. A
+        `submitted` batch row that survives a crash refers to results this
+        instance never produced; `analyze` uses this to drop such orphaned
+        batches and re-queue their items rather than raising KeyError in
+        `results()` (see #25).
+        """
+        return provider_id in self._batches
 
     def results(self, provider_id: str) -> list[BatchResult]:
         return self._batches[provider_id]

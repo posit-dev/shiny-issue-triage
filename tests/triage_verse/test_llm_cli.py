@@ -147,6 +147,19 @@ def test_claude_cli_client_is_marked_synchronous():
     assert llm.ClaudeCliClient(runner=lambda *a, **k: "{}").synchronous is True
 
 
+def test_recognizes_only_provider_ids_this_instance_submitted():
+    # Results live only in memory, so a fresh instance (e.g. after a process
+    # restart) recognizes none of the provider ids a dead process submitted.
+    def runner(args, prompt):
+        return _envelope('{"verdict": "duplicate"}')
+
+    client = llm.ClaudeCliClient(runner=runner)
+    pid = client.submit([_request("c0")])
+    assert client.recognizes(pid) is True
+    assert client.recognizes("cli-from-a-dead-process") is False
+    assert llm.ClaudeCliClient(runner=runner).recognizes(pid) is False
+
+
 def test_make_batch_client_threads_log_into_claude_cli():
     logged = []
     client = llm.make_batch_client(_cfg("claude_cli"), log=logged.append)
