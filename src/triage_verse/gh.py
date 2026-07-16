@@ -97,6 +97,8 @@ def _graphql_query(rest: list[str], input: str | None) -> str:
             raise EgressRefused(
                 "unparseable graphql payload — refusing fail-closed"
             ) from exc
+    # No query flag and no --input body: an empty request cannot mutate
+    # anything, so return "" (classified as a read by _mutation_fields).
     return ""
 
 
@@ -255,23 +257,38 @@ def run_gh(
     raise GhError(last_error)
 
 
+# Shared label-mutation vocabulary — used here (add_issue_label) and by the
+# executor. Issues and PRs share these GraphQL fields (see ALLOWED_MUTATION_FIELDS).
+ADD_LABELS_MUTATION = (
+    "mutation($id: ID!, $labels: [ID!]!) { addLabelsToLabelable("
+    "input: {labelableId: $id, labelIds: $labels}) { clientMutationId } }"
+)
+REMOVE_LABELS_MUTATION = (
+    "mutation($id: ID!, $labels: [ID!]!) { removeLabelsFromLabelable("
+    "input: {labelableId: $id, labelIds: $labels}) { clientMutationId } }"
+)
+
+
+def label_node_id(repo: str, name: str, *, run_gh: "Callable[..., str]") -> str:
+    """Resolve a label's GraphQL node ID by name (a REST read, passes the guard)."""
+    from urllib.parse import quote
+
+    out = run_gh(["api", f"repos/{repo}/labels/{quote(name, safe='')}"])
+    return json.loads(out)["node_id"]
+
+
 def add_issue_label(
     repo: str, number: int, label: str, *, run_gh: "Callable[..., str] | None" = None
 ) -> None:
     """Add one label to an issue via the guarded GraphQL write path."""
-    from urllib.parse import quote
-
     _run = run_gh if run_gh is not None else globals()["run_gh"]
     node_id = json.loads(_run(["api", f"repos/{repo}/issues/{number}"]))["node_id"]
-    label_id = json.loads(
-        _run(["api", f"repos/{repo}/labels/{quote(label, safe='')}"])
-    )["node_id"]
-    query = (
-        "mutation($id: ID!, $labels: [ID!]!) { addLabelsToLabelable("
-        "input: {labelableId: $id, labelIds: $labels}) { clientMutationId } }"
-    )
+    label_id = label_node_id(repo, label, run_gh=_run)
     gh_mutation(
-        "addLabelsToIssue", query, {"id": node_id, "labels": [label_id]}, repos=[repo]
+        "addLabelsToIssue",
+        ADD_LABELS_MUTATION,
+        {"id": node_id, "labels": [label_id]},
+        repos=[repo],
     )
 
 

@@ -217,14 +217,8 @@ def _describe(mutation: dict) -> str:
 
 _CLOSE_STATE_REASON = {"completed": "COMPLETED", "not planned": "NOT_PLANNED"}
 
-_ADD_LABELS = (
-    "mutation($id: ID!, $labels: [ID!]!) { addLabelsToLabelable("
-    "input: {labelableId: $id, labelIds: $labels}) { clientMutationId } }"
-)
-_REMOVE_LABELS = (
-    "mutation($id: ID!, $labels: [ID!]!) { removeLabelsFromLabelable("
-    "input: {labelableId: $id, labelIds: $labels}) { clientMutationId } }"
-)
+_ADD_LABELS = gh_mod.ADD_LABELS_MUTATION
+_REMOVE_LABELS = gh_mod.REMOVE_LABELS_MUTATION
 _ADD_COMMENT = (
     "mutation($id: ID!, $body: String!) { addComment(input: {subjectId: $id,"
     " body: $body}) { commentEdge { node { databaseId } } } }"
@@ -245,13 +239,6 @@ _DELETE_COMMENT = (
 )
 
 
-def _label_node_id(run_gh: RunGh, repo: str, name: str) -> str:
-    from urllib.parse import quote
-
-    out = run_gh(["api", f"repos/{repo}/labels/{quote(name, safe='')}"])
-    return json.loads(out)["node_id"]
-
-
 def _comment_node_id(run_gh: RunGh, repo: str, comment_id: int) -> str:
     out = run_gh(["api", f"repos/{repo}/issues/comments/{comment_id}"])
     return json.loads(out)["node_id"]
@@ -263,7 +250,7 @@ def _apply_mutation(
     """Perform one mutation via guarded GraphQL; returns comment databaseId if any."""
     kind = mutation["kind"]
     if kind == "add-label":
-        label_id = _label_node_id(run_gh, repo, mutation["label"])
+        label_id = gh_mod.label_node_id(repo, mutation["label"], run_gh=run_gh)
         gh_mod.gh_mutation(
             "addLabelsToIssue",
             _ADD_LABELS,
@@ -271,7 +258,7 @@ def _apply_mutation(
             repos=[repo],
         )
     elif kind == "remove-label":
-        label_id = _label_node_id(run_gh, repo, mutation["label"])
+        label_id = gh_mod.label_node_id(repo, mutation["label"], run_gh=run_gh)
         gh_mod.gh_mutation(
             "removeLabelsFromIssue",
             _REMOVE_LABELS,
@@ -305,7 +292,8 @@ def _apply_mutation(
     return None
 
 
-_MIRROR_STATE_REASON = {"completed": "COMPLETED", "not planned": "NOT_PLANNED"}
+# Same GitHub → mirror mapping used when closing an issue (see _CLOSE_STATE_REASON).
+_MIRROR_STATE_REASON = _CLOSE_STATE_REASON
 
 
 def _update_mirror(

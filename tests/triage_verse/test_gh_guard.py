@@ -1,5 +1,4 @@
 import json
-import json as _json
 import subprocess
 
 import pytest
@@ -204,8 +203,8 @@ def test_gh_mutation_validates_and_dispatches(monkeypatch):
 
     def fake_run(args, *, input=None, operation=None, repos=None, **kw):
         seen["args"], seen["operation"], seen["repos"] = args, operation, repos
-        seen["payload"] = _json.loads(input)
-        return _json.dumps({"data": {"closeIssue": {"issue": {"id": "N1"}}}})
+        seen["payload"] = json.loads(input)
+        return json.dumps({"data": {"closeIssue": {"issue": {"id": "N1"}}}})
 
     monkeypatch.setattr(gh, "run_gh", fake_run)
     data = gh.gh_mutation(

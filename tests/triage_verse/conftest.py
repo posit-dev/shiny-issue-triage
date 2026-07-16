@@ -31,8 +31,17 @@ class GhRelay:
 def gh_relay(monkeypatch, request):
     """Auto-patch gh.run_gh for tests that use the guarded write path."""
     module = request.node.module.__name__ if hasattr(request.node, "module") else ""
-    _needs_relay = ("test_executor", "tier2", "reprex")
-    if not any(tag in module for tag in _needs_relay):
+    short = module.rsplit(".", 1)[-1]
+    # Test modules that exercise the guarded write path, matched by prefix so a
+    # stray name like `test_foo_tier2_bar` does not accidentally opt in.
+    _needs_relay = (
+        "test_executor",
+        "test_tier2",
+        "test_reprex",
+        "test_review_app_tier2",
+        "test_review_app_reprex",
+    )
+    if not short.startswith(_needs_relay):
         yield GhRelay()  # no-op: don't patch for unrelated tests
         return
     relay = GhRelay()
