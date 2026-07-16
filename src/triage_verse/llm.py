@@ -30,7 +30,7 @@ class BatchRequest:
 @dataclass
 class BatchResult:
     custom_id: str
-    status: str  # succeeded | errored | canceled | expired
+    status: str  # succeeded | errored | rate_limited | canceled | expired
     message: Any = None  # provider message object on success
     error: Any = None
     cost_usd: float | None = None
@@ -329,6 +329,26 @@ class ClaudeCliClient:
                 continue
             total_cost += float(envelope.get("total_cost_usd") or 0.0)
             last_usage = _usage_ns(envelope.get("usage") or {})
+            if _is_rate_limit(envelope):
+                # A rate limit is a predictable, load-driven failure, not a
+                # content-quality one -- return immediately so it does NOT
+                # consume the two-attempt budget. `analyze` halts the stage on
+                # this status; the item re-queues next run. Carry usage/cost so
+                # tokens already spent stay metered.
+                return BatchResult(
+                    request.custom_id,
+                    "rate_limited",
+                    message=_CliMessage({}, last_usage),
+                    error=str(envelope.get("result") or "rate-limited"),
+                    cost_usd=total_cost,
+                )
+            if envelope.get("is_error"):
+                # A non-rate-limit error (e.g. billing/auth): treat as a failed
+                # attempt, matching the pre-existing "burn an attempt then
+                # error" behavior, and avoid feeding a null/error `result` into
+                # the JSON extractor.
+                last_error = f"cli-error: {envelope.get('result') or envelope.get('api_error_status')}"
+                continue
             try:
                 data = _extract_json_object(envelope["result"])
                 jsonschema.validate(data, schema)

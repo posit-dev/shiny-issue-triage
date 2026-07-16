@@ -238,3 +238,57 @@ def test_is_rate_limit_ignores_non_rate_limit_and_success():
     assert llm._is_rate_limit({"is_error": True, "result": "billing_error"}) is False
     assert llm._is_rate_limit({"api_error_status": None, "result": "4"}) is False
     assert llm._is_rate_limit({}) is False
+
+
+def _error_envelope(result_text, api_error_status=None, cost=0.01):
+    return json.dumps(
+        {
+            "type": "result",
+            "subtype": "error",
+            "is_error": True,
+            "api_error_status": api_error_status,
+            "result": result_text,
+            "total_cost_usd": cost,
+            "usage": {
+                "input_tokens": 5,
+                "output_tokens": 0,
+                "cache_read_input_tokens": 0,
+            },
+        }
+    )
+
+
+def test_submit_one_rate_limited_on_api_error_status_without_burning_budget():
+    calls = []
+
+    def runner(args, prompt):
+        calls.append(1)
+        return _error_envelope(
+            "API Error: Request rejected (429)", api_error_status=429
+        )
+
+    result = llm.ClaudeCliClient(runner=runner).submit_one(_request())
+    assert result.status == "rate_limited"
+    assert len(calls) == 1  # did NOT consume the second content-retry attempt
+    assert result.cost_usd == 0.01  # spend still tracked
+    assert result.usage is not None
+
+
+def test_submit_one_rate_limited_on_usage_limit_string():
+    def runner(args, prompt):
+        return _error_envelope("You've hit your weekly limit · resets Mon 12:00am")
+
+    result = llm.ClaudeCliClient(runner=runner).submit_one(_request())
+    assert result.status == "rate_limited"
+
+
+def test_submit_one_errors_on_non_rate_limit_error_after_two_attempts():
+    calls = []
+
+    def runner(args, prompt):
+        calls.append(1)
+        return _error_envelope("billing_error: insufficient credits")
+
+    result = llm.ClaudeCliClient(runner=runner).submit_one(_request())
+    assert result.status == "errored"
+    assert len(calls) == 2  # a generic error still burns both attempts
