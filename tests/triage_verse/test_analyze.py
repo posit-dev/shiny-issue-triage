@@ -565,7 +565,10 @@ def test_parallel_stage_halts_on_rate_limit_and_drains_inflight(tmp_path):
         sleep=lambda s: None,
     )
     assert summary["halted_on_rate_limit"] is True
-    # workers=2 fills [c0, c1]; c0 rate-limits instantly and halts before c2/c3
+    # workers=2 fills {c0, c1}; c0 rate-limits instantly and halts before c2/c3
     # are ever dispatched, but the in-flight c1 still completes and is recorded.
-    assert client.submitted == ["c0", "c1"]
+    # Assert on the set/size, not order: the two worker threads append to
+    # `submitted` under a lock, so their relative order is not deterministic.
+    assert set(client.submitted) == {"c0", "c1"}
+    assert len(client.submitted) == 2
     assert con.execute("SELECT COUNT(*) FROM classifications").fetchone()[0] == 1
