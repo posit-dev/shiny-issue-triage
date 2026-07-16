@@ -275,9 +275,6 @@ _HALT_LOG = {
     None: "done",
     "budget": "halted on budget",
     "rate_limit": "halted on rate limit",
-    # Legacy compat: _submit_stage_parallel still returns bool until Task 5.
-    True: "done",
-    False: "halted on budget",
 }
 
 
@@ -373,17 +370,24 @@ def _submit_stage_parallel(
     loses at most that many in-flight items -- both bounds now scale with
     `cfg.workers` instead of being fixed at 1, which is the explicit,
     documented trade-off of running more than one call at a time.
+
+    A `rate_limited` result halts new dispatch the same way, but items already
+    in flight are still drained and recorded (their spend is committed and they
+    may still succeed). The rate-limited item's own spend is recorded, but no
+    batch row is written for it, so it re-queues on the next run.
+
+    Returns None on success, or "budget" / "rate_limit" on a halt.
     """
     total = len(requests)
     next_idx = 0
     done = 0
-    halted = False
+    halt = None
     with concurrent.futures.ThreadPoolExecutor(max_workers=cfg.workers) as pool:
         in_flight: dict[concurrent.futures.Future, int] = {}
         while next_idx < total or in_flight:
-            while not halted and len(in_flight) < cfg.workers and next_idx < total:
+            while halt is None and len(in_flight) < cfg.workers and next_idx < total:
                 if spend.breaker_tripped(con, cfg):
-                    halted = True
+                    halt = "budget"
                     break
                 future = pool.submit(client.submit_one, requests[next_idx])
                 in_flight[future] = next_idx
@@ -393,6 +397,23 @@ def _submit_stage_parallel(
             done_future = next(concurrent.futures.as_completed(in_flight))
             idx = in_flight.pop(done_future)
             result = done_future.result()
+            if result.status == "rate_limited":
+                # Record spend so the daily total stays accurate, but write no
+                # batch row -- the item stays unstored and re-queues next run.
+                # Stop dispatching new items; in-flight ones still drain below.
+                if result.usage is not None:
+                    spend.record_spend(
+                        con,
+                        run_id,
+                        stage,
+                        _model(cfg, stage),
+                        cfg.pricing,
+                        result.usage,
+                        cost_usd=result.cost_usd,
+                    )
+                    con.commit()
+                halt = "rate_limit"
+                continue
             batch_id = f"{run_id}:{stage}:{idx}"
             db.insert_batch(
                 con, batch_id, run_id, stage, f"local:{result.custom_id}", 1
@@ -412,12 +433,16 @@ def _submit_stage_parallel(
             con.commit()
             done += 1
             log(f"  {stage} progress: {done}/{total}")
-    if halted:
+    if halt == "budget":
         log(
             f"budget reached; not submitting more {stage} batches ({done}/{total} done)"
         )
-        return False
-    return True
+    elif halt == "rate_limit":
+        log(
+            f"rate limit reached; not submitting more {stage} batches "
+            f"({done}/{total} done)"
+        )
+    return halt
 
 
 def _record_and_apply(
