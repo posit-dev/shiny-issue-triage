@@ -1,4 +1,7 @@
 import json
+import subprocess
+
+import pytest
 
 from triage_verse import llm
 
@@ -168,6 +171,32 @@ def test_make_batch_client_threads_log_into_claude_cli():
     client.submit([_request("c0")])
 
     assert logged and "c0" in logged[0]
+
+
+def test_default_runner_returns_stdout_on_nonzero_exit_with_output(monkeypatch):
+    # `claude -p --output-format json` prints its error envelope to stdout and
+    # still exits non-zero on a rate limit; that stdout must be surfaced, not
+    # discarded, so submit_one can classify the failure.
+    import types as _t
+
+    def fake_run(*a, **k):
+        return _t.SimpleNamespace(
+            returncode=1, stdout='{"is_error": true}', stderr="boom"
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert llm._default_runner(["--x"], "p") == '{"is_error": true}'
+
+
+def test_default_runner_raises_on_nonzero_exit_without_output(monkeypatch):
+    import types as _t
+
+    def fake_run(*a, **k):
+        return _t.SimpleNamespace(returncode=1, stdout="  ", stderr="crash detail")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError, match="crash detail"):
+        llm._default_runner(["--x"], "p")
 
 
 def _cfg(backend):

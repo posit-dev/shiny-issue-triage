@@ -160,7 +160,12 @@ def _default_runner(args: list[str], prompt: str) -> str:
         encoding="utf-8",
         timeout=_CLI_TIMEOUT,
     )
-    if proc.returncode != 0:
+    # `claude -p --output-format json` prints its result envelope -- including
+    # is_error / api_error_status on a rate limit -- to stdout and still exits
+    # non-zero. Surface that stdout so submit_one can classify the failure from
+    # the envelope; only a non-zero exit with no stdout is an opaque crash
+    # (or timeout) worth raising with its stderr for diagnostics.
+    if proc.returncode != 0 and not proc.stdout.strip():
         raise RuntimeError(f"claude -p exited {proc.returncode}: {proc.stderr[:500]}")
     return proc.stdout
 
