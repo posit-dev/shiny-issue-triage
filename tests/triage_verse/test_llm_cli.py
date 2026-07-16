@@ -217,3 +217,24 @@ def _cfg(backend):
         {},
         backend=backend,
     )
+
+
+def test_is_rate_limit_detects_api_error_status():
+    assert llm._is_rate_limit({"api_error_status": 429}) is True
+    assert llm._is_rate_limit({"api_error_status": 529}) is True
+
+
+def test_is_rate_limit_detects_error_string_patterns():
+    for msg in (
+        "You've hit your weekly limit · resets Mon 12:00am",
+        "API Error: Request rejected (429)",
+        "Repeated 529 Overloaded errors",
+        "Server is temporarily limiting requests (not your usage limit)",
+    ):
+        assert llm._is_rate_limit({"is_error": True, "result": msg}) is True, msg
+
+
+def test_is_rate_limit_ignores_non_rate_limit_and_success():
+    assert llm._is_rate_limit({"is_error": True, "result": "billing_error"}) is False
+    assert llm._is_rate_limit({"api_error_status": None, "result": "4"}) is False
+    assert llm._is_rate_limit({}) is False

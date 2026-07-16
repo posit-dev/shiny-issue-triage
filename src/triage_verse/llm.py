@@ -151,6 +151,37 @@ _MODEL_ALIASES = {"claude-haiku-4-5": "haiku", "claude-sonnet-5": "claude-sonnet
 _MAX_PROMPT_CHARS = 50_000
 _CLI_TIMEOUT = 300  # seconds; a hung `claude -p` must not block the run forever.
 
+# Substrings (matched case-insensitively against the CLI's error `result`
+# string) that mark a rate-limit / usage-limit / overload failure. The exact
+# strings vary by CLI version and limit kind (transient 429/529 throttle vs.
+# sustained session/weekly/Opus subscription limit), so this is a deliberately
+# broad, easily-extended list rather than an exhaustive match. `subtype` is NOT
+# keyed on -- its value differs across CLI versions.
+_RATE_LIMIT_PATTERNS = (
+    "rate limit",
+    "429",
+    "529",
+    "overloaded",
+    "usage limit",
+    "temporarily limiting requests",
+    "hit your",
+)
+
+
+def _is_rate_limit(envelope: dict) -> bool:
+    """True if a `claude -p --output-format json` envelope reports a rate limit.
+
+    Robust to CLI-version drift by checking two independent signals: the numeric
+    `api_error_status` (429/529), and, for any error envelope, a substring match
+    of the human `result` string against `_RATE_LIMIT_PATTERNS`.
+    """
+    if envelope.get("api_error_status") in (429, 529):
+        return True
+    if not envelope.get("is_error"):
+        return False
+    text = str(envelope.get("result") or "").lower()
+    return any(pattern in text for pattern in _RATE_LIMIT_PATTERNS)
+
 
 def _default_runner(args: list[str], prompt: str) -> str:
     proc = subprocess.run(
