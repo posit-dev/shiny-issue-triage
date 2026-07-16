@@ -191,7 +191,8 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
     summary = _run_analyze(args)
     human = (
         f"classified={summary['classified']} rechecked={summary['rechecked']} "
-        f"pairs={summary['pairs']} halted_on_budget={summary['halted_on_budget']}"
+        f"pairs={summary['pairs']} halted_on_budget={summary['halted_on_budget']} "
+        f"halted_on_rate_limit={summary['halted_on_rate_limit']}"
     )
     return args._out.emit(summary, human)
 
