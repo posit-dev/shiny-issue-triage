@@ -70,4 +70,6 @@ def test_prune_valid_id_exits_nonzero(tmp_path, capsys):
     )
 
     assert rc == 1
-    assert "valid module id" in capsys.readouterr().out
+    # Bad input is routed through Output.fail, which writes to stderr in
+    # human mode (stdout is reserved for machine-readable --json output).
+    assert "valid module id" in capsys.readouterr().err

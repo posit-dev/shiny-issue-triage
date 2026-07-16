@@ -105,3 +105,21 @@ and prints the undo command.
 
 Design: `docs/superpowers/specs/2026-06-12-shinyverse-issue-triage-design.md`.
 Open followups: `docs/superpowers/plans/2026-06-12-triage-verse-followups.md`.
+
+## Machine-readable output (`--json`)
+
+Every command accepts a global `--json` flag, in either position
+(`triage-verse --json sync` or `triage-verse sync --json`). With it, the command
+prints a single JSON envelope on stdout and sends all human/progress logging to
+stderr:
+
+    {"command": "sync", "ok": true, "exit_code": 0,
+     "data": {"repos": 2, "issues": 4, "prs": 2, "comments": 6}}
+
+- `ok` is `true` when the command ran to completion. A command that ran fine but
+  reports a negative result (e.g. `verify-counts` found a mismatch) is still
+  `ok: true`, with a non-zero `exit_code` and the details in `data`.
+- Bad input or an unexpected error gives `{"ok": false, "error": "..."}` with a
+  non-zero `exit_code`.
+- `exit_code` mirrors the process exit code, so shell callers can branch on
+  either the field or `$?`.
