@@ -494,3 +494,81 @@ def test_synchronous_client_persists_each_item_before_next(tmp_path):
     rows = con.execute("SELECT status FROM batches WHERE stage='classify'").fetchall()
     assert len(rows) == 3
     assert all(r["status"] == "collected" for r in rows)
+
+
+def test_rate_limited_result_halts_sequential_stage_and_requeues(tmp_path):
+    # A rate limit on the 2nd classify item halts the stage: the 1st item is
+    # classified, the 3rd is never submitted, and the halt is reported without
+    # writing proposals (the run is left to resume next invocation).
+    con = db.connect(tmp_path / "m.sqlite")
+    _n_issues(con, 3)
+    scripted = {
+        "c0": {"status": "succeeded", "payload": _clf(0.9)},
+        "c1": {"status": "rate_limited"},
+        "c2": {"status": "succeeded", "payload": _clf(0.9)},
+    }
+    client = _SyncFakeClient(scripted)
+    summary = analyze.analyze(
+        con,
+        _cfg(),
+        embedder=embed.FakeEmbedder(db.VEC_DIM),
+        batch_client=client,
+        rubric_path=RUBRIC,
+        labels_path=LABELS,
+        proposals_dir=tmp_path / "proposals",
+        wait=True,
+        sleep=lambda s: None,
+    )
+    assert summary["halted_on_rate_limit"] is True
+    assert summary["classified"] == 1
+    assert con.execute("SELECT COUNT(*) FROM classifications").fetchone()[0] == 1
+    # finalization skipped -> no proposals dir created
+    assert not (tmp_path / "proposals").exists()
+
+
+class _RateLimitedParallelClient:
+    """submit_one-only client: one custom_id returns rate_limited (instantly),
+    every other item succeeds after a small delay so the rate-limited item wins
+    the race and halts dispatch deterministically while an in-flight item is
+    still running (proving in-flight items are drained and recorded)."""
+
+    synchronous = True
+
+    def __init__(self, rate_limited_cid, delay=0.1):
+        self.rate_limited_cid = rate_limited_cid
+        self.delay = delay
+        self._lock = threading.Lock()
+        self.submitted = []
+
+    def submit_one(self, request):
+        with self._lock:
+            self.submitted.append(request.custom_id)
+        if request.custom_id == self.rate_limited_cid:
+            return llm.BatchResult(request.custom_id, "rate_limited", cost_usd=0.0)
+        time.sleep(self.delay)
+        return llm.BatchResult(request.custom_id, "succeeded", message=_Msg(_clf(0.9)))
+
+
+def test_parallel_stage_halts_on_rate_limit_and_drains_inflight(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+    _n_issues(con, 4)
+    client = _RateLimitedParallelClient(rate_limited_cid="c0")
+    summary = analyze.analyze(
+        con,
+        _cfg(workers=2),
+        embedder=embed.FakeEmbedder(db.VEC_DIM),
+        batch_client=client,
+        rubric_path=RUBRIC,
+        labels_path=LABELS,
+        proposals_dir=tmp_path / "proposals",
+        wait=True,
+        sleep=lambda s: None,
+    )
+    assert summary["halted_on_rate_limit"] is True
+    # workers=2 fills {c0, c1}; c0 rate-limits instantly and halts before c2/c3
+    # are ever dispatched, but the in-flight c1 still completes and is recorded.
+    # Assert on the set/size, not order: the two worker threads append to
+    # `submitted` under a lock, so their relative order is not deterministic.
+    assert set(client.submitted) == {"c0", "c1"}
+    assert len(client.submitted) == 2
+    assert con.execute("SELECT COUNT(*) FROM classifications").fetchone()[0] == 1

@@ -8,13 +8,19 @@ from triage_verse import embed as embed_mod
 from triage_verse import llm
 
 
-def test_cli_analyze_invokes_pipeline(tmp_path, monkeypatch):
+def test_cli_analyze_invokes_pipeline(tmp_path, monkeypatch, capsys):
     captured = {}
 
     def fake_analyze(con, cfg, **kw):
         captured.update(kw)
         captured["cfg"] = cfg
-        return {"classified": 3, "rechecked": 1, "pairs": 2, "halted_on_budget": False}
+        return {
+            "classified": 3,
+            "rechecked": 1,
+            "pairs": 2,
+            "halted_on_budget": False,
+            "halted_on_rate_limit": False,
+        }
 
     monkeypatch.setattr(analyze_mod, "analyze", fake_analyze)
     # Prevent real FastEmbedEmbedder (lazy-imports fastembed + downloads model)
@@ -39,6 +45,8 @@ def test_cli_analyze_invokes_pipeline(tmp_path, monkeypatch):
         ]
     )
     assert rc == 0
+    out = capsys.readouterr().out
+    assert "halted_on_rate_limit=False" in out
     assert captured["repo"] == "rstudio/shinytest2"
     assert captured["limit"] == 5
     assert captured["wait"] is True
@@ -100,6 +108,7 @@ def test_cli_analyze_uses_backend_factory(tmp_path, monkeypatch):
             "rechecked": 0,
             "pairs": 0,
             "halted_on_budget": False,
+            "halted_on_rate_limit": False,
         },
     )
     rc = cli.main(

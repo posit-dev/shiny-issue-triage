@@ -1,4 +1,7 @@
 import json
+import subprocess
+
+import pytest
 
 from triage_verse import llm
 
@@ -170,6 +173,32 @@ def test_make_batch_client_threads_log_into_claude_cli():
     assert logged and "c0" in logged[0]
 
 
+def test_default_runner_returns_stdout_on_nonzero_exit_with_output(monkeypatch):
+    # `claude -p --output-format json` prints its error envelope to stdout and
+    # still exits non-zero on a rate limit; that stdout must be surfaced, not
+    # discarded, so submit_one can classify the failure.
+    import types as _t
+
+    def fake_run(*a, **k):
+        return _t.SimpleNamespace(
+            returncode=1, stdout='{"is_error": true}', stderr="boom"
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert llm._default_runner(["--x"], "p") == '{"is_error": true}'
+
+
+def test_default_runner_raises_on_nonzero_exit_without_output(monkeypatch):
+    import types as _t
+
+    def fake_run(*a, **k):
+        return _t.SimpleNamespace(returncode=1, stdout="  ", stderr="crash detail")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError, match="crash detail"):
+        llm._default_runner(["--x"], "p")
+
+
 def _cfg(backend):
     from triage_verse import config
 
@@ -188,3 +217,78 @@ def _cfg(backend):
         {},
         backend=backend,
     )
+
+
+def test_is_rate_limit_detects_api_error_status():
+    assert llm._is_rate_limit({"api_error_status": 429}) is True
+    assert llm._is_rate_limit({"api_error_status": 529}) is True
+
+
+def test_is_rate_limit_detects_error_string_patterns():
+    for msg in (
+        "You've hit your weekly limit · resets Mon 12:00am",
+        "API Error: Request rejected (429)",
+        "Repeated 529 Overloaded errors",
+        "Server is temporarily limiting requests (not your usage limit)",
+    ):
+        assert llm._is_rate_limit({"is_error": True, "result": msg}) is True, msg
+
+
+def test_is_rate_limit_ignores_non_rate_limit_and_success():
+    assert llm._is_rate_limit({"is_error": True, "result": "billing_error"}) is False
+    assert llm._is_rate_limit({"api_error_status": None, "result": "4"}) is False
+    assert llm._is_rate_limit({}) is False
+
+
+def _error_envelope(result_text, api_error_status=None, cost=0.01):
+    return json.dumps(
+        {
+            "type": "result",
+            "subtype": "error",
+            "is_error": True,
+            "api_error_status": api_error_status,
+            "result": result_text,
+            "total_cost_usd": cost,
+            "usage": {
+                "input_tokens": 5,
+                "output_tokens": 0,
+                "cache_read_input_tokens": 0,
+            },
+        }
+    )
+
+
+def test_submit_one_rate_limited_on_api_error_status_without_burning_budget():
+    calls = []
+
+    def runner(args, prompt):
+        calls.append(1)
+        return _error_envelope(
+            "API Error: Request rejected (429)", api_error_status=429
+        )
+
+    result = llm.ClaudeCliClient(runner=runner).submit_one(_request())
+    assert result.status == "rate_limited"
+    assert len(calls) == 1  # did NOT consume the second content-retry attempt
+    assert result.cost_usd == 0.01  # spend still tracked
+    assert result.usage is not None
+
+
+def test_submit_one_rate_limited_on_usage_limit_string():
+    def runner(args, prompt):
+        return _error_envelope("You've hit your weekly limit · resets Mon 12:00am")
+
+    result = llm.ClaudeCliClient(runner=runner).submit_one(_request())
+    assert result.status == "rate_limited"
+
+
+def test_submit_one_errors_on_non_rate_limit_error_after_two_attempts():
+    calls = []
+
+    def runner(args, prompt):
+        calls.append(1)
+        return _error_envelope("billing_error: insufficient credits")
+
+    result = llm.ClaudeCliClient(runner=runner).submit_one(_request())
+    assert result.status == "errored"
+    assert len(calls) == 2  # a generic error still burns both attempts
