@@ -2,11 +2,29 @@
 
 from __future__ import annotations
 
+import functools
+import os
 import pathlib
 import uuid
 from datetime import datetime, timezone
 
-from . import jsonl_log
+from . import gh, jsonl_log
+
+
+@functools.cache
+def current_actor() -> str:
+    """Resolve the local reviewer's identity for decision attribution.
+
+    Tries the GitHub login (a REST read that passes the egress guard), then
+    `$USER`, then "unknown". Cached: resolved once per process. Never raises.
+    """
+    try:
+        login = gh.run_gh(["api", "user", "--jq", ".login"], retries=1).strip()
+        if login:
+            return login
+    except Exception:
+        pass
+    return os.environ.get("USER") or "unknown"
 
 
 def record(

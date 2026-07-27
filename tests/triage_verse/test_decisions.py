@@ -1,6 +1,8 @@
 import json
 
-from triage_verse import decisions
+import pytest
+
+from triage_verse import decisions, gh
 
 
 def _proposal(**overrides):
@@ -71,3 +73,40 @@ def test_write_appends_weekly_partition(tmp_path):
     # appends, not overwrites
     decisions.write([rec], tmp_path / "decisions", today="2026-06-29")
     assert len(path.read_text().splitlines()) == 2
+
+
+@pytest.fixture(autouse=True)
+def _clear_actor_cache():
+    decisions.current_actor.cache_clear()
+    yield
+    decisions.current_actor.cache_clear()
+
+
+def test_current_actor_uses_gh_login(monkeypatch):
+    calls = []
+
+    def fake_run_gh(args, **kwargs):
+        calls.append(args)
+        return "octocat\n"
+
+    monkeypatch.setattr(gh, "run_gh", fake_run_gh)
+    assert decisions.current_actor() == "octocat"
+    # cached: a second call does not invoke gh again
+    assert decisions.current_actor() == "octocat"
+    assert len(calls) == 1
+    assert calls[0] == ["api", "user", "--jq", ".login"]
+
+
+def test_current_actor_falls_back_to_user_env(monkeypatch):
+    def boom(args, **kwargs):
+        raise gh.GhError("not authenticated")
+
+    monkeypatch.setattr(gh, "run_gh", boom)
+    monkeypatch.setenv("USER", "barret")
+    assert decisions.current_actor() == "barret"
+
+
+def test_current_actor_falls_back_to_unknown(monkeypatch):
+    monkeypatch.setattr(gh, "run_gh", lambda args, **kwargs: "")
+    monkeypatch.delenv("USER", raising=False)
+    assert decisions.current_actor() == "unknown"
