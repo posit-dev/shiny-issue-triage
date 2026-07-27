@@ -36,7 +36,8 @@ repositories:
   # - rstudio/plumber
   # - rstudio/pool
   # - rstudio/sass
-  # - rstudio/shiny            # NB: enabling this means `--full` sparingly (see SYNC POLICY)
+  # NB: enabling the next line means `--full` sparingly (see SYNC POLICY above)
+  # - rstudio/shiny
   # - rstudio/shinycoreci
   # - schloerke/shinyjster
   # - rstudio/shinymeta
@@ -46,7 +47,8 @@ repositories:
   # - rstudio/thematic
   # - rstudio/webdriver
   # - rstudio/websocket
-  # - posit-dev/py-shiny       # NB: enabling this means `--full` sparingly (see SYNC POLICY)
+  # NB: enabling the next line means `--full` sparingly (see SYNC POLICY above)
+  # - posit-dev/py-shiny
   # - posit-dev/py-htmltools
   # - posit-dev/py-shinywidgets
   # - posit-dev/shinylive
