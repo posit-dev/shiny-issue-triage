@@ -12,7 +12,13 @@ def test_sync_all_records_run_and_counts(tmp_path, monkeypatch):
         con, ["rstudio/shiny", "rstudio/bslib"], full=False, log=lambda msg: None
     )
 
-    assert summary == {"repos": 2, "issues": 4, "prs": 2, "comments": 6}
+    assert summary == {
+        "repos": 2,
+        "issues": 4,
+        "prs": 2,
+        "comments": 6,
+        "retired": 0,
+    }
     run = con.execute("SELECT * FROM runs").fetchone()
     assert run["kind"] == "sync"
     assert run["finished_at"] is not None

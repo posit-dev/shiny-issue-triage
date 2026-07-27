@@ -58,11 +58,15 @@ def test_reconcile_repo_deletes_only_unseen_issues(tmp_path):
     assert db.get_issue(con, "r/b", 3) is not None
 
 
-def _graphql_returning(numbers):
+def _graphql_returning(numbers, total=None):
+    """A one-page issues walk. `total` is GitHub's reported totalCount; it
+    defaults to the node count (a complete, un-raced walk)."""
+
     def graphql(query, variables):
         return {
             "repository": {
                 "issues": {
+                    "totalCount": len(numbers) if total is None else total,
                     "pageInfo": {"hasNextPage": False, "endCursor": None},
                     "nodes": [
                         {
@@ -163,6 +167,81 @@ def test_full_sync_refuses_to_wipe_a_repo_on_an_empty_response(tmp_path):
 
     assert db.get_issue(con, "r/a", 1) is not None
     assert db.get_issue(con, "r/a", 2) is not None
+
+
+def _stub_sync_all_deps(monkeypatch, graphql):
+    """Run sync_all's issue walk against `graphql`, with PRs and comments stubbed.
+
+    `sync_issues` binds gh_graphql as a default argument, so the fake is injected
+    by wrapping the function rather than patching the module attribute.
+    """
+    real_sync_issues = sync.sync_issues
+    monkeypatch.setattr(
+        sync,
+        "sync_issues",
+        lambda con, repo, **kw: real_sync_issues(con, repo, graphql=graphql, **kw),
+    )
+    monkeypatch.setattr(sync, "sync_prs", lambda *a, **k: 0)
+    monkeypatch.setattr(sync, "sync_comments", lambda *a, **k: 0)
+
+
+def test_full_sync_refuses_to_retire_when_the_walk_saw_fewer_than_github_reports(
+    tmp_path,
+):
+    """Pagination over UPDATED_AT DESC can skip a live issue that is commented on
+    mid-walk; a short walk must delete nothing rather than retire it."""
+    con = db.connect(tmp_path / "m.sqlite")
+    _insert(con, "r/a", 1)
+    _insert(con, "r/a", 2)
+    lines: list[str] = []
+
+    # GitHub reports 2 issues but the walk only returned #2: #1 was skipped, not
+    # removed.
+    sync.sync_issues(
+        con,
+        "r/a",
+        graphql=_graphql_returning([2], total=2),
+        full=True,
+        log=lines.append,
+    )
+
+    assert db.get_issue(con, "r/a", 1) is not None
+    assert db.get_issue(con, "r/a", 2) is not None
+    assert any("REFUSING" in line and "GitHub reports 2" in line for line in lines)
+
+
+def test_full_sync_still_retires_when_the_count_matches(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+    _insert(con, "r/a", 1)
+    _insert(con, "r/a", 2)
+
+    sync.sync_issues(con, "r/a", graphql=_graphql_returning([2], total=1), full=True)
+
+    assert db.get_issue(con, "r/a", 1) is None
+    assert db.get_issue(con, "r/a", 2) is not None
+
+
+def test_sync_all_reports_retired_rows_in_its_totals(tmp_path, monkeypatch):
+    """The destructive step must be visible to --json / the runs table."""
+    con = db.connect(tmp_path / "m.sqlite")
+    _insert(con, "r/a", 1)
+    _insert(con, "r/a", 2)
+    _stub_sync_all_deps(monkeypatch, _graphql_returning([2], total=1))
+
+    totals = sync.sync_all(con, ["r/a"], full=True, log=lambda _: None)
+
+    assert totals["retired"] == 1
+    assert db.get_issue(con, "r/a", 1) is None
+
+
+def test_sync_all_reports_zero_retired_when_nothing_is_deleted(tmp_path, monkeypatch):
+    con = db.connect(tmp_path / "m.sqlite")
+    _insert(con, "r/a", 1)
+    _stub_sync_all_deps(monkeypatch, _graphql_returning([1]))
+
+    totals = sync.sync_all(con, ["r/a"], full=True, log=lambda _: None)
+
+    assert totals["retired"] == 0
 
 
 def test_reconcile_repo_returns_empty_and_warns_on_an_empty_response(tmp_path):
