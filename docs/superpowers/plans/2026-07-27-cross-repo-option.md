@@ -1596,6 +1596,10 @@ mirrored set against GitHub and delete what vanished."
 
 **Task 10 is a prerequisite for shipping, not a nice-to-have.** Tasks 1-9 make `transfer` actionable, and an actioned transfer creates the ghost row that makes dedup recommend undoing it. Do not ship Tasks 1-9 without Task 10. It is ordered last only because it is independent of them; running it first is equally valid.
 
-**Reconciliation runs on full syncs only.** An incremental sync stops at the stored cursor, so absence from its window is normal and carries no information. Ghosts therefore persist until the next `sync --full`. That is a deliberate limit, not an oversight: inferring deletion from an incremental window would retire live issues.
+**Reconciliation runs on full syncs only,** because an incremental sync stops at the stored cursor and absence from that window carries no information — inferring deletion from it would retire live issues. So ghosts persist until the next `sync --full`.
+
+At current scale that caveat is close to vacuous. Measured 2026-07-27, the active 4-repo pilot is a **~30-request** full sync (437 issues, 392 PRs, 1,212 comments; 50/page for issues and PRs, 100/page for comments), and sync costs no LLM spend at all — so `--full` can run on every scheduled pass and reconciliation is effectively continuous. Reconciliation itself adds **zero** requests: it is a `SELECT number FROM issues WHERE repo=?` diffed against a set already in memory.
+
+This changes once `rstudio/shiny` or `posit-dev/py-shiny` is activated in `config/repos.yaml`. `rstudio/shiny` alone is ~195 requests — 6.5x the entire current pilot — and `posit-dev/py-shiny` ~75; the full 41 repos are ~767. With either of the big two active, syncs go incremental and `--full` runs sparingly, at which point ghosts really can persist between full passes. The policy and the measured figures are recorded at the top of `config/repos.yaml`, next to the lines that trigger the change.
 
 **Residual gap after Task 10:** the transferred issue is still re-analyzed from scratch in its new repo, since nothing links B#N back to A#1. That is defensible — labels and priority appropriate in repo B may genuinely differ — but it does mean repeated analysis spend. Separately, if repo B is not active in `config/repos.yaml`, the transferred issue is never mirrored and leaves the system silently.
