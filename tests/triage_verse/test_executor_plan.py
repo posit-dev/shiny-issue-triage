@@ -15,6 +15,7 @@ ALLOWED = {
     "Priority: High",
     "Priority: Low",
 }
+ALLOWED_WITH_TRANSFER = ALLOWED | {"wrong location"}
 
 
 def _decision(action, params, repo="o/r", issue=7):
@@ -166,6 +167,91 @@ def test_close_duplicate_bad_canonical_is_an_error(params):
         _decision("close-duplicate", params), _issue(), allowed=ALLOWED, tmpl=TMPL
     )
     assert muts == [] and err is not None
+
+
+def test_link_duplicate_comments_without_closing():
+    muts, err = executor.plan_decision(
+        _decision(
+            "link-duplicate",
+            {"canonical": "other/repo#3", "cross_repo_option": "keep-both-link"},
+        ),
+        _issue(),
+        allowed=ALLOWED,
+        tmpl=TMPL,
+    )
+    assert err is None
+    assert len(muts) == 1
+    assert muts[0]["kind"] == "comment"
+    assert "https://github.com/other/repo/issues/3" in muts[0]["body"]
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"canonical": None, "cross_repo_option": "keep-both-link"},
+        {"canonical": "nonsense", "cross_repo_option": "keep-both-link"},
+        {"canonical": "o/r#7", "cross_repo_option": "keep-both-link"},
+    ],
+)
+def test_link_duplicate_bad_canonical_is_an_error(params):
+    muts, err = executor.plan_decision(
+        _decision("link-duplicate", params), _issue(), allowed=ALLOWED, tmpl=TMPL
+    )
+    assert muts == [] and err is not None
+
+
+def test_suggest_transfer_only_labels():
+    muts, err = executor.plan_decision(
+        _decision(
+            "suggest-transfer",
+            {"canonical": "other/repo#3", "cross_repo_option": "transfer"},
+        ),
+        _issue(),
+        allowed=ALLOWED_WITH_TRANSFER,
+        tmpl=TMPL,
+    )
+    assert err is None
+    assert muts == [{"kind": "add-label", "label": "wrong location"}]
+
+
+def test_suggest_transfer_never_emits_a_transfer_mutation():
+    muts, _ = executor.plan_decision(
+        _decision(
+            "suggest-transfer",
+            {"canonical": "other/repo#3", "cross_repo_option": "transfer"},
+        ),
+        _issue(),
+        allowed=ALLOWED_WITH_TRANSFER,
+        tmpl=TMPL,
+    )
+    assert all(m["kind"] != "transfer" for m in muts)
+    assert not any("transfer" in str(m.get("kind", "")) for m in muts)
+
+
+def test_suggest_transfer_rejects_same_repo_target():
+    muts, err = executor.plan_decision(
+        _decision(
+            "suggest-transfer",
+            {"canonical": "o/r#3", "cross_repo_option": "transfer"},
+        ),
+        _issue(),
+        allowed=ALLOWED_WITH_TRANSFER,
+        tmpl=TMPL,
+    )
+    assert muts == [] and "own repo" in err
+
+
+def test_suggest_transfer_requires_the_label_to_be_allowlisted():
+    muts, err = executor.plan_decision(
+        _decision(
+            "suggest-transfer",
+            {"canonical": "other/repo#3", "cross_repo_option": "transfer"},
+        ),
+        _issue(),
+        allowed=ALLOWED,
+        tmpl=TMPL,
+    )
+    assert muts == [] and "allowlist" in err
 
 
 def test_unknown_action_is_an_error():

@@ -60,6 +60,7 @@ CLOSE_REASON_MAP = {
     "stale": ("not planned", "close-not-planned"),
     "not-planned": ("not planned", "close-not-planned"),
 }
+TRANSFER_LABEL = "wrong location"
 
 _REF_FULL = re.compile(r"^([\w.-]+/[\w.-]+)#(\d+)$")
 _REF_URL = re.compile(r"^https://github\.com/([\w.-]+/[\w.-]+)/issues/(\d+)$")
@@ -185,6 +186,35 @@ def plan_decision(
             {"kind": "comment", "body": body},
             {"kind": "close", "reason": "not planned"},
         ], None
+
+    if action == "link-duplicate":
+        canonical = params.get("canonical")
+        if not canonical:
+            return [], "link-duplicate requires a canonical target"
+        ref = parse_issue_ref(str(canonical), decision["repo"])
+        if ref is None:
+            return [], f"cannot parse canonical issue ref: {canonical!r}"
+        if ref == (decision["repo"], decision["issue"]):
+            return [], "canonical target is the issue itself"
+        body = templates_mod.render(
+            tmpl, "link-duplicate", canonical_url=_issue_url(*ref)
+        )
+        return [{"kind": "comment", "body": body}], None
+
+    if action == "suggest-transfer":
+        canonical = params.get("canonical")
+        if not canonical:
+            return [], "suggest-transfer requires a canonical target"
+        ref = parse_issue_ref(str(canonical), decision["repo"])
+        if ref is None:
+            return [], f"cannot parse canonical issue ref: {canonical!r}"
+        if ref[0] == decision["repo"]:
+            return [], "suggest-transfer target is the issue's own repo"
+        if TRANSFER_LABEL not in allowed:
+            return [], f"label not in allowlist: {TRANSFER_LABEL!r}"
+        # Labels the issue for a human to move. The executor has no transfer
+        # capability and never gains one; see the Transfers tab in the review app.
+        return [{"kind": "add-label", "label": TRANSFER_LABEL}], None
 
     return [], f"action not allowlisted: {action!r}"
 
