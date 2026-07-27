@@ -94,21 +94,50 @@ def _walk_updated_desc(
     return count
 
 
-def reconcile_repo(con: sqlite3.Connection, repo: str, seen: set[int]) -> list[int]:
+def reconcile_repo(
+    con: sqlite3.Connection,
+    repo: str,
+    seen: set[int],
+    *,
+    log: Callable[[str], None] = print,
+) -> list[int]:
     """Delete mirrored issues of `repo` that GitHub no longer lists.
 
     Only sound after an exhaustive walk (`full=True`): an incremental sync stops
     at the stored cursor and legitimately never sees older issues, so absence
     there means nothing. A transferred issue leaves its source repo altogether,
     so absence from a full walk is the only signal available.
+
+    Refuses to act when the walk saw no issues at all but the mirror holds some:
+    an exception-free empty response is far more likely to mean Issues are
+    disabled, a permissions problem, or an eventual-consistency blip than a repo
+    that genuinely lost every issue. A truly empty repo has no mirrored rows
+    either, so the guard costs nothing in the legitimate case.
     """
     rows = con.execute(
         "SELECT number FROM issues WHERE repo=? AND is_pr=0", (repo,)
     ).fetchall()
+    if not seen and rows:
+        log(
+            f"  reconcile {repo}: REFUSING to retire {len(rows)} mirrored issue(s) "
+            f"-- GitHub returned no issues at all, which usually means an API or "
+            f"permissions problem rather than a genuinely empty repo. Re-run "
+            f"`sync --full` once the cause is resolved."
+        )
+        return []
     gone = sorted(r["number"] for r in rows if r["number"] not in seen)
     for number in gone:
         db.delete_issue(con, repo, number)
     con.commit()
+    # A destructive stage announces itself even when it deletes nothing, so an
+    # operator reading the log can see the step ran at all.
+    if gone:
+        log(
+            f"  reconcile {repo}: retired {len(gone)} issue(s) GitHub no longer "
+            f"lists (transferred or deleted): {gone}"
+        )
+    else:
+        log(f"  reconcile {repo}: nothing to retire")
     return gone
 
 
@@ -133,12 +162,7 @@ def sync_issues(
     # A full walk is exhaustive (no cursor, so it exits only when the connection
     # is drained), and an exception would have propagated before reaching here.
     if full:
-        gone = reconcile_repo(con, repo, seen)
-        if gone:
-            log(
-                f"  reconcile {repo}: retired {len(gone)} issue(s) GitHub no longer "
-                f"lists (transferred or deleted): {gone}"
-            )
+        reconcile_repo(con, repo, seen, log=log)
     return count
 
 

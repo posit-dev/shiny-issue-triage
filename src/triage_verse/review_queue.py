@@ -148,6 +148,11 @@ def load_undecided(
             skipped_at[pid] = t
 
     proposals = []
+    # Proposals dropped because the mirror has NO row for the issue at all --
+    # distinct from present-but-closed. Reported in aggregate after the loop so a
+    # short queue caused by a stale or partial mirror is not read as "nothing to
+    # review".
+    absent_from_mirror = 0
     for r in iter_jsonl_records(proposals_dir):
         pid = r.get("id")
         if not valid_module_id(pid):
@@ -161,11 +166,11 @@ def load_undecided(
                 pid,
             )
             continue
-        if (
-            pid in terminal_ids
-            or r.get("action") not in SUPPORTED_ACTIONS
-            or _not_reviewable(con, r["repo"], r["issue"])
-        ):
+        if pid in terminal_ids or r.get("action") not in SUPPORTED_ACTIONS:
+            continue
+        if _not_reviewable(con, r["repo"], r["issue"]):
+            if db.get_issue(con, r["repo"], r["issue"]) is None:
+                absent_from_mirror += 1
             continue
         rec = {**r, "stale": True} if pid in stale_at else dict(r)
         skip_t = skipped_at.get(pid) if isinstance(pid, str) else None
@@ -177,6 +182,15 @@ def load_undecided(
         ):
             rec["deferred"] = True
         proposals.append(rec)
+    if absent_from_mirror:
+        logger.warning(
+            "dropped %d proposal(s): the mirror has no row for the issue, so it was "
+            "either retired by 'triage-verse sync --full' (transferred away or "
+            "deleted on GitHub) or never synced. Run 'triage-verse sync --full' to "
+            "confirm the mirror is current; proposals still missing after that "
+            "refer to issues GitHub no longer has.",
+            absent_from_mirror,
+        )
     return sorted(
         proposals,
         key=lambda r: (r.get("deferred", False), -(r.get("confidence") or 0.0)),

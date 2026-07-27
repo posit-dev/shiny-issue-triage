@@ -567,7 +567,18 @@ def delete_issue(con: sqlite3.Connection, repo: str, number: int) -> None:
     Classification and dedup history keyed to (repo, number) is deliberately
     left in place, as are the append-only JSONL logs, so the audit trail
     survives the row.
+
+    Non-PR issues only. `issues` and `prs` share the `(repo, number)` namespace
+    but `comments`, `issue_vectors`, and `vec_issues` do not carry `is_pr`, so
+    the `is_pr=0` condition is enforced up front rather than only on the `issues`
+    DELETE: called with a PR number, an unguarded version would strip that PR's
+    comments and vector while leaving its row behind. A PR is a no-op instead.
     """
+    existing = con.execute(
+        "SELECT is_pr FROM issues WHERE repo=? AND number=?", (repo, number)
+    ).fetchone()
+    if existing is not None and existing["is_pr"]:
+        return
     row = con.execute(
         "SELECT id FROM issue_vectors WHERE repo=? AND number=?", (repo, number)
     ).fetchone()

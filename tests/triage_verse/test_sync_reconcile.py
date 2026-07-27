@@ -117,6 +117,9 @@ def test_retired_ghost_stops_pairing_with_its_transferred_copy(tmp_path):
 
     con = db.connect(tmp_path / "m.sqlite")
     _insert(con, "r/a", 1, title="crash on init", body="stack trace")
+    # A surviving sibling in r/a, so the walk below returns a non-empty node set
+    # and the empty-response guard does not engage; r/a#1 is the only absentee.
+    _insert(con, "r/a", 2, title="unrelated thing", body="unrelated thing")
     _insert(con, "r/b", 9, title="crash on init", body="stack trace")
     embedder = embed.FakeEmbedder()
     embed.embed_repo(con, "r/a", embedder)
@@ -128,7 +131,7 @@ def test_retired_ghost_stops_pairing_with_its_transferred_copy(tmp_path):
         {(a[0], a[1]), (b[0], b[1])} == {("r/a", 1), ("r/b", 9)} for a, b in before
     )
 
-    sync.sync_issues(con, "r/a", graphql=_graphql_returning([]), full=True)
+    sync.sync_issues(con, "r/a", graphql=_graphql_returning([2]), full=True)
 
     after = candidates.candidate_pairs(con, cfg)
     assert not any(("r/a", 1) in ((a[0], a[1]), (b[0], b[1])) for a, b in after)
@@ -137,9 +140,95 @@ def test_retired_ghost_stops_pairing_with_its_transferred_copy(tmp_path):
 def test_reembedding_does_not_resurrect_a_retired_issue(tmp_path):
     con = db.connect(tmp_path / "m.sqlite")
     _insert(con, "r/a", 1)
+    # Sibling #2 survives, so the walk is non-empty and the empty-response guard
+    # stays out of the way; #1 is the retired ghost.
+    _insert(con, "r/a", 2)
     embed.embed_repo(con, "r/a", embed.FakeEmbedder())
-    sync.sync_issues(con, "r/a", graphql=_graphql_returning([]), full=True)
+    sync.sync_issues(con, "r/a", graphql=_graphql_returning([2]), full=True)
 
     embed.embed_repo(con, "r/a", embed.FakeEmbedder())
 
     assert db.get_embed_hash(con, "r/a", 1) is None
+    assert db.get_embed_hash(con, "r/a", 2) is not None
+
+
+def test_full_sync_refuses_to_wipe_a_repo_on_an_empty_response(tmp_path):
+    """An exception-free zero-node walk means an API or permissions problem, not
+    a repo that genuinely lost every issue."""
+    con = db.connect(tmp_path / "m.sqlite")
+    _insert(con, "r/a", 1)
+    _insert(con, "r/a", 2)
+
+    sync.sync_issues(con, "r/a", graphql=_graphql_returning([]), full=True)
+
+    assert db.get_issue(con, "r/a", 1) is not None
+    assert db.get_issue(con, "r/a", 2) is not None
+
+
+def test_reconcile_repo_returns_empty_and_warns_on_an_empty_response(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+    _insert(con, "r/a", 1)
+    _insert(con, "r/a", 2)
+    lines: list[str] = []
+
+    gone = sync.reconcile_repo(con, "r/a", set(), log=lines.append)
+
+    assert gone == []
+    assert db.get_issue(con, "r/a", 1) is not None
+    assert db.get_issue(con, "r/a", 2) is not None
+    assert any("REFUSING" in line for line in lines)
+
+
+def test_reconcile_repo_allows_a_genuinely_empty_repo(tmp_path):
+    """The guard costs nothing legitimately: an empty repo has no mirrored rows."""
+    con = db.connect(tmp_path / "m.sqlite")
+
+    assert sync.reconcile_repo(con, "r/a", set(), log=lambda _: None) == []
+
+
+def test_reconcile_logs_even_when_nothing_is_retired(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+    _insert(con, "r/a", 1)
+    lines: list[str] = []
+
+    sync.sync_issues(
+        con, "r/a", graphql=_graphql_returning([1]), full=True, log=lines.append
+    )
+
+    assert any("nothing to retire" in line for line in lines)
+
+
+def test_delete_issue_leaves_pull_requests_alone(tmp_path):
+    """`issues` and `prs` share (repo, number), and comments/vectors carry no
+    is_pr, so a PR must be a no-op rather than a partial strip."""
+    con = db.connect(tmp_path / "m.sqlite")
+    con.execute(
+        "INSERT INTO issues (repo, number, title, body, state, created_at,"
+        " updated_at, is_pr) VALUES ('r/a', 7, 'T', 'B', 'OPEN',"
+        " '2026-01-01T00:00:00Z', '2026-06-01T00:00:00Z', 1)"
+    )
+    db.upsert_comment(
+        con,
+        {
+            "repo": "r/a",
+            "issue_number": 7,
+            "comment_id": 1,
+            "author": "x",
+            "body": "hi",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        },
+    )
+    db.upsert_vector(con, "r/a", 7, "h", embed.FakeEmbedder().embed(["T\nB"])[0])
+    con.commit()
+
+    db.delete_issue(con, "r/a", 7)
+
+    assert db.get_issue(con, "r/a", 7) is not None
+    assert db.get_embed_hash(con, "r/a", 7) == "h"
+    assert (
+        con.execute(
+            "SELECT COUNT(*) FROM comments WHERE repo='r/a' AND issue_number=7"
+        ).fetchone()[0]
+        == 1
+    )

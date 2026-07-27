@@ -684,3 +684,61 @@ def test_proposal_for_a_retired_issue_leaves_the_queue(tmp_path):
 
     # No issues row at all: the mirror has no such issue.
     assert review_queue.load_undecided(props, decisions_dir, con) == []
+
+
+def test_proposals_absent_from_mirror_are_reported_once(tmp_path, caplog):
+    """A short queue caused by a stale/partial mirror must not look like an
+    empty one -- one aggregate warning, not one per proposal."""
+    con = _mirror(tmp_path)
+    _seed_issue(con, "r/r", 1, "OPEN")  # present and reviewable
+    _seed_issue(con, "r/r", 2, "CLOSED")  # present but closed: not counted
+    proposals_dir = tmp_path / "proposals"
+    decisions_dir = tmp_path / "decisions"
+    _write_jsonl(
+        proposals_dir / "2026" / "W27.jsonl",
+        [
+            {
+                "id": f"p{n}",
+                "repo": "r/r",
+                "issue": n,
+                "action": "add-label",
+                "confidence": 0.5,
+            }
+            # 3 and 4 have no mirror row at all.
+            for n in (1, 2, 3, 4)
+        ],
+    )
+    with caplog.at_level("WARNING", logger="triage_verse.review_queue"):
+        rows = review_queue.load_undecided(proposals_dir, decisions_dir, con)
+    assert [r["id"] for r in rows] == ["p1"]
+    warnings = [
+        r.getMessage()
+        for r in caplog.records
+        if "no row for the issue" in r.getMessage()
+    ]
+    assert len(warnings) == 1
+    assert "dropped 2 proposal(s)" in warnings[0]
+
+
+def test_no_absent_warning_when_every_issue_is_mirrored(tmp_path, caplog):
+    con = _mirror(tmp_path)
+    _seed_issue(con, "r/r", 1, "OPEN")
+    _seed_issue(con, "r/r", 2, "CLOSED")
+    proposals_dir = tmp_path / "proposals"
+    decisions_dir = tmp_path / "decisions"
+    _write_jsonl(
+        proposals_dir / "2026" / "W27.jsonl",
+        [
+            {
+                "id": f"p{n}",
+                "repo": "r/r",
+                "issue": n,
+                "action": "add-label",
+                "confidence": 0.5,
+            }
+            for n in (1, 2)
+        ],
+    )
+    with caplog.at_level("WARNING", logger="triage_verse.review_queue"):
+        review_queue.load_undecided(proposals_dir, decisions_dir, con)
+    assert not [r for r in caplog.records if "no row for the issue" in r.getMessage()]
