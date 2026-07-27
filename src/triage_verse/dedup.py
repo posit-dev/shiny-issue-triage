@@ -44,6 +44,19 @@ def _issue_block(con: sqlite3.Connection, repo: str, number: int) -> str:
     )
 
 
+CROSS_REPO_GUIDANCE = """\
+When A and B are duplicates that live in DIFFERENT repositories, set
+cross_repo_option to whichever of these fits the situation:
+- "close-and-link": the duplicate adds nothing the canonical issue lacks, so the
+  discussion should consolidate on the canonical issue.
+- "keep-both-link": both issues have standing in their own repositories -- for
+  example, the same defect must be tracked separately in an R package and its
+  Python counterpart. Neither issue should be closed.
+- "transfer": the issue is filed in the wrong repository, and its content belongs
+  in the canonical issue's repository rather than being discarded.
+Set cross_repo_option to null when A and B live in the SAME repository."""
+
+
 def build_requests(
     con: sqlite3.Connection,
     stage: config.StageConfig,
@@ -59,7 +72,8 @@ def build_requests(
                 _issue_block(con, a[0], a[1]),
                 "Issue B:",
                 _issue_block(con, b[0], b[1]),
-                "Decide whether A and B are duplicate, related, or distinct. "
+                "Decide whether A and B are duplicate, related, or distinct.",
+                CROSS_REPO_GUIDANCE,
                 "Respond with JSON matching the schema.",
             ]
         )
