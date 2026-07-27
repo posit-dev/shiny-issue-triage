@@ -606,6 +606,12 @@ def server(input: Inputs, output: Outputs, session: Session):
                     ui.input_text(f"edit_{key}", key, value=str(value))
                     for key, value in proposal["params"].items()
                 ],
+                ui.input_text_area(
+                    "edit_reason",
+                    "Reason",
+                    value=proposal.get("rationale") or "",
+                    width="100%",
+                ),
                 title="Edit proposal",
                 footer=[
                     ui.input_action_button(
@@ -626,9 +632,10 @@ def server(input: Inputs, output: Outputs, session: Session):
         params = {key: input[f"edit_{key}"]().strip() for key in proposal["params"]}
         if any(not v for v in params.values()):
             return  # keep the modal open until every field has a value
+        reason = input.edit_reason().strip() or None
         edit_target.set(None)
         ui.modal_remove()
-        on_decide(proposal, "edited", params=params)
+        on_decide(proposal, "edited", params=params, reason=reason)
 
     def _open_reject_modal(proposal: dict) -> None:
         _select(proposal)
