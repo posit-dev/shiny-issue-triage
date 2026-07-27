@@ -1,6 +1,46 @@
 """Reconciling mirrored issues that GitHub no longer lists (transferred/deleted)."""
 
+import json
+
+import pytest
+
 from triage_verse import candidates, db, embed, sync
+
+# Captured before the autouse guard below shadows the module attribute, so the
+# unit tests for confirm_retirable itself can still reach the real function.
+_REAL_CONFIRM = sync.confirm_retirable
+
+
+@pytest.fixture(autouse=True)
+def _no_real_confirmation_reads(monkeypatch):
+    """Fail loudly if a test reaches real GitHub to confirm a retirement.
+
+    `reconcile_repo` falls back to `confirm_retirable`, which shells out to `gh`.
+    A test that forgets to inject `confirm=` would otherwise quietly depend on
+    the network -- and on a nonexistent repo 404ing, which reads as "gone" and
+    makes a deletion look confirmed when nothing was actually checked.
+
+    This patches the fallback rather than `gh_run`, because `confirm_retirable`
+    binds its `run_gh` default at definition time, whereas `reconcile_repo`
+    resolves this name per call.
+    """
+
+    def explode(*_args, **_kwargs):
+        raise AssertionError(
+            "test reached the real gh transport; pass confirm= to "
+            "reconcile_repo/sync_issues/sync_all instead"
+        )
+
+    monkeypatch.setattr(sync, "confirm_retirable", explode)
+
+
+def _confirm(verdicts: dict[int, tuple[str, str | None]]):
+    """Fake confirmation reader: issue number -> (verdict, detail)."""
+
+    def confirm(repo: str, number: int) -> tuple[str, str | None]:
+        return verdicts.get(number, ("live", None))
+
+    return confirm
 
 
 def _insert(con, repo, number, title="T", body="B", state="OPEN"):
@@ -50,7 +90,9 @@ def test_reconcile_repo_deletes_only_unseen_issues(tmp_path):
     _insert(con, "r/a", 2)
     _insert(con, "r/b", 3)
 
-    gone = sync.reconcile_repo(con, "r/a", {2})
+    gone = sync.reconcile_repo(
+        con, "r/a", {2}, log=lambda _m: None, confirm=_confirm({1: ("gone", None)})
+    )
 
     assert gone == [1]
     assert db.get_issue(con, "r/a", 1) is None
@@ -99,7 +141,13 @@ def test_full_sync_retires_a_transferred_issue(tmp_path):
     _insert(con, "r/a", 1)
     _insert(con, "r/a", 2)
 
-    sync.sync_issues(con, "r/a", graphql=_graphql_returning([2]), full=True)
+    sync.sync_issues(
+        con,
+        "r/a",
+        graphql=_graphql_returning([2]),
+        full=True,
+        confirm=_confirm({1: ("gone", None)}),
+    )
 
     assert db.get_issue(con, "r/a", 1) is None
     assert db.get_issue(con, "r/a", 2) is not None
@@ -135,7 +183,13 @@ def test_retired_ghost_stops_pairing_with_its_transferred_copy(tmp_path):
         {(a[0], a[1]), (b[0], b[1])} == {("r/a", 1), ("r/b", 9)} for a, b in before
     )
 
-    sync.sync_issues(con, "r/a", graphql=_graphql_returning([2]), full=True)
+    sync.sync_issues(
+        con,
+        "r/a",
+        graphql=_graphql_returning([2]),
+        full=True,
+        confirm=_confirm({1: ("gone", None)}),
+    )
 
     after = candidates.candidate_pairs(con, cfg)
     assert not any(("r/a", 1) in ((a[0], a[1]), (b[0], b[1])) for a, b in after)
@@ -148,7 +202,13 @@ def test_reembedding_does_not_resurrect_a_retired_issue(tmp_path):
     # stays out of the way; #1 is the retired ghost.
     _insert(con, "r/a", 2)
     embed.embed_repo(con, "r/a", embed.FakeEmbedder())
-    sync.sync_issues(con, "r/a", graphql=_graphql_returning([2]), full=True)
+    sync.sync_issues(
+        con,
+        "r/a",
+        graphql=_graphql_returning([2]),
+        full=True,
+        confirm=_confirm({1: ("gone", None)}),
+    )
 
     embed.embed_repo(con, "r/a", embed.FakeEmbedder())
 
@@ -163,7 +223,13 @@ def test_full_sync_refuses_to_wipe_a_repo_on_an_empty_response(tmp_path):
     _insert(con, "r/a", 1)
     _insert(con, "r/a", 2)
 
-    sync.sync_issues(con, "r/a", graphql=_graphql_returning([]), full=True)
+    sync.sync_issues(
+        con,
+        "r/a",
+        graphql=_graphql_returning([]),
+        full=True,
+        confirm=_confirm({}),
+    )
 
     assert db.get_issue(con, "r/a", 1) is not None
     assert db.get_issue(con, "r/a", 2) is not None
@@ -185,37 +251,45 @@ def _stub_sync_all_deps(monkeypatch, graphql):
     monkeypatch.setattr(sync, "sync_comments", lambda *a, **k: 0)
 
 
-def test_full_sync_refuses_to_retire_when_the_walk_saw_fewer_than_github_reports(
-    tmp_path,
-):
-    """Pagination over UPDATED_AT DESC can skip a live issue that is commented on
-    mid-walk; a short walk must delete nothing rather than retire it."""
+def test_full_sync_keeps_a_live_issue_the_walk_skipped(tmp_path):
+    """Pagination over UPDATED_AT DESC can skip a live issue commented on mid-walk.
+
+    A short walk no longer vetoes the whole repo -- the candidate is confirmed
+    against GitHub instead, and a live answer keeps the row.
+    """
     con = db.connect(tmp_path / "m.sqlite")
     _insert(con, "r/a", 1)
     _insert(con, "r/a", 2)
     lines: list[str] = []
 
-    # GitHub reports 2 issues but the walk only returned #2: #1 was skipped, not
-    # removed.
     sync.sync_issues(
         con,
         "r/a",
         graphql=_graphql_returning([2], total=2),
         full=True,
         log=lines.append,
+        confirm=_confirm({1: ("live", None)}),
     )
 
     assert db.get_issue(con, "r/a", 1) is not None
     assert db.get_issue(con, "r/a", 2) is not None
-    assert any("REFUSING" in line and "GitHub reports 2" in line for line in lines)
+    assert any("GitHub reports 2" in line for line in lines)
+    assert any("still live" in line for line in lines)
+    assert not any("REFUSING" in line for line in lines)
 
 
-def test_full_sync_still_retires_when_the_count_matches(tmp_path):
+def test_full_sync_retires_a_candidate_github_confirms_is_gone(tmp_path):
     con = db.connect(tmp_path / "m.sqlite")
     _insert(con, "r/a", 1)
     _insert(con, "r/a", 2)
 
-    sync.sync_issues(con, "r/a", graphql=_graphql_returning([2], total=1), full=True)
+    sync.sync_issues(
+        con,
+        "r/a",
+        graphql=_graphql_returning([2], total=1),
+        full=True,
+        confirm=_confirm({1: ("gone", None)}),
+    )
 
     assert db.get_issue(con, "r/a", 1) is None
     assert db.get_issue(con, "r/a", 2) is not None
@@ -228,7 +302,13 @@ def test_sync_all_reports_retired_rows_in_its_totals(tmp_path, monkeypatch):
     _insert(con, "r/a", 2)
     _stub_sync_all_deps(monkeypatch, _graphql_returning([2], total=1))
 
-    totals = sync.sync_all(con, ["r/a"], full=True, log=lambda _: None)
+    totals = sync.sync_all(
+        con,
+        ["r/a"],
+        full=True,
+        log=lambda _: None,
+        confirm=_confirm({1: ("gone", None)}),
+    )
 
     assert totals["retired"] == 1
     assert db.get_issue(con, "r/a", 1) is None
@@ -239,7 +319,13 @@ def test_sync_all_reports_zero_retired_when_nothing_is_deleted(tmp_path, monkeyp
     _insert(con, "r/a", 1)
     _stub_sync_all_deps(monkeypatch, _graphql_returning([1]))
 
-    totals = sync.sync_all(con, ["r/a"], full=True, log=lambda _: None)
+    totals = sync.sync_all(
+        con,
+        ["r/a"],
+        full=True,
+        log=lambda _: None,
+        confirm=_confirm({1: ("gone", None)}),
+    )
 
     assert totals["retired"] == 0
 
@@ -311,3 +397,195 @@ def test_delete_issue_leaves_pull_requests_alone(tmp_path):
         ).fetchone()[0]
         == 1
     )
+
+
+# --- per-candidate confirmation: retire only what GitHub confirms -------------
+
+
+def test_candidate_github_reports_gone_is_retired(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+    _insert(con, "r/a", 1)
+    _insert(con, "r/a", 2)
+    lines: list[str] = []
+
+    gone = sync.reconcile_repo(
+        con, "r/a", {2}, log=lines.append, confirm=_confirm({1: ("gone", None)})
+    )
+
+    assert gone == [1]
+    assert db.get_issue(con, "r/a", 1) is None
+    assert any("no longer exists" in line for line in lines)
+
+
+def test_transferred_candidate_is_retired_and_names_its_destination(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+    _insert(con, "r/a", 1)
+    _insert(con, "r/a", 2)
+    lines: list[str] = []
+
+    gone = sync.reconcile_repo(
+        con,
+        "r/a",
+        {2},
+        log=lines.append,
+        confirm=_confirm({1: ("transferred", "other/repo")}),
+    )
+
+    assert gone == [1]
+    assert db.get_issue(con, "r/a", 1) is None
+    assert any("transferred to other/repo" in line for line in lines)
+
+
+def test_a_live_candidate_the_walk_missed_is_kept(tmp_path):
+    """The reason this whole mechanism exists."""
+    con = db.connect(tmp_path / "m.sqlite")
+    _insert(con, "r/a", 1)
+    _insert(con, "r/a", 2)
+    lines: list[str] = []
+
+    gone = sync.reconcile_repo(
+        con, "r/a", {2}, log=lines.append, confirm=_confirm({1: ("live", None)})
+    )
+
+    assert gone == []
+    assert db.get_issue(con, "r/a", 1) is not None
+    assert any("still live" in line for line in lines)
+
+
+def test_a_candidate_whose_confirmation_read_fails_is_kept(tmp_path):
+    """A rate limit or bad gateway must never be read as absence."""
+    con = db.connect(tmp_path / "m.sqlite")
+    _insert(con, "r/a", 1)
+    _insert(con, "r/a", 2)
+    lines: list[str] = []
+
+    gone = sync.reconcile_repo(
+        con,
+        "r/a",
+        {2},
+        log=lines.append,
+        confirm=_confirm({1: ("unknown", "HTTP 502")}),
+    )
+
+    assert gone == []
+    assert db.get_issue(con, "r/a", 1) is not None
+    assert any("could not confirm" in line and "502" in line for line in lines)
+
+
+def test_implausible_candidate_share_refuses_the_whole_repo(tmp_path):
+    """Losing more than a tenth of a repo at once is a symptom of a bad walk."""
+    con = db.connect(tmp_path / "m.sqlite")
+    for n in range(1, 101):
+        _insert(con, "r/a", n)
+    lines: list[str] = []
+    calls: list[int] = []
+
+    def confirm(repo: str, number: int):
+        calls.append(number)
+        return ("gone", None)
+
+    gone = sync.reconcile_repo(con, "r/a", {1, 2, 3}, log=lines.append, confirm=confirm)
+
+    assert gone == []
+    assert calls == []  # refused before spending a single confirmation read
+    assert db.get_issue(con, "r/a", 50) is not None
+    assert any("REFUSING" in line for line in lines)
+
+
+def test_a_small_repo_can_still_retire_despite_the_percentage_cap(tmp_path):
+    """A strict 10% cap alone would make retirement impossible on a tiny repo,
+    hence RETIRE_MIN_ALLOWANCE."""
+    con = db.connect(tmp_path / "m.sqlite")
+    _insert(con, "r/a", 1)
+    _insert(con, "r/a", 2)
+
+    gone = sync.reconcile_repo(
+        con, "r/a", {2}, log=lambda _m: None, confirm=_confirm({1: ("gone", None)})
+    )
+
+    assert gone == [1]
+
+
+def test_reconcile_summarises_candidates_checked_and_retired(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+    for n in (1, 2, 3):
+        _insert(con, "r/a", n)
+    lines: list[str] = []
+
+    sync.reconcile_repo(
+        con,
+        "r/a",
+        {3},
+        log=lines.append,
+        confirm=_confirm({1: ("gone", None), 2: ("live", None)}),
+    )
+
+    assert any("2 candidate(s) checked, 1 retired" in line for line in lines)
+
+
+# --- confirm_retirable: interpreting GitHub's answer --------------------------
+
+
+def test_confirm_retirable_reads_404_as_gone():
+    from triage_verse import gh
+
+    def run_gh(args, **kwargs):
+        raise gh.GhError("gh: Not Found (HTTP 404)")
+
+    assert _REAL_CONFIRM("r/a", 1, run_gh=run_gh) == ("gone", None)
+
+
+def test_confirm_retirable_reads_a_cross_repo_redirect_as_transferred():
+    def run_gh(args, **kwargs):
+        return json.dumps(
+            {"number": 3902, "repository_url": "https://api.github.com/repos/r/b"}
+        )
+
+    assert _REAL_CONFIRM("r/a", 1, run_gh=run_gh) == ("transferred", "r/b")
+
+
+def test_confirm_retirable_reads_a_same_repo_response_as_live():
+    def run_gh(args, **kwargs):
+        return json.dumps(
+            {"number": 1, "repository_url": "https://api.github.com/repos/r/a"}
+        )
+
+    assert _REAL_CONFIRM("r/a", 1, run_gh=run_gh) == ("live", None)
+
+
+def test_confirm_retirable_is_case_insensitive_about_the_repo():
+    def run_gh(args, **kwargs):
+        return json.dumps(
+            {"number": 1, "repository_url": "https://api.github.com/repos/R/A"}
+        )
+
+    assert _REAL_CONFIRM("r/a", 1, run_gh=run_gh) == ("live", None)
+
+
+def test_confirm_retirable_treats_a_transport_error_as_unknown():
+    from triage_verse import gh
+
+    def run_gh(args, **kwargs):
+        raise gh.GhError("HTTP 502 Bad Gateway")
+
+    verdict, detail = _REAL_CONFIRM("r/a", 1, run_gh=run_gh)
+    assert verdict == "unknown" and "502" in (detail or "")
+
+
+def test_confirm_retirable_treats_unparseable_json_as_unknown():
+    def run_gh(args, **kwargs):
+        return "not json{"
+
+    assert _REAL_CONFIRM("r/a", 1, run_gh=run_gh)[0] == "unknown"
+
+
+def test_confirm_retirable_asks_only_for_that_one_issue():
+    """A bounded REST GET, which the egress guard allows as a read."""
+    seen: list[list[str]] = []
+
+    def run_gh(args, **kwargs):
+        seen.append(args)
+        return json.dumps({"repository_url": "https://api.github.com/repos/r/a"})
+
+    _REAL_CONFIRM("r/a", 7, run_gh=run_gh)
+    assert seen == [["api", "repos/r/a/issues/7"]]

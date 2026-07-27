@@ -37,6 +37,15 @@ and its embedding. Classification and dedup history plus the append-only JSONL
 logs are retained, so the audit trail outlives the row. Incremental syncs never
 retire anything, since stopping at a cursor means absence proves nothing.
 
+Absence from the walk only makes an issue a *candidate*. Each one is then
+confirmed with a single read against GitHub, and the row is deleted only on a
+404 or on a redirect into another repository; an issue that is still there —
+which pagination can easily skip on a busy repo — is kept, as is one whose
+confirmation read fails. Those reads scale with candidates rather than repo
+size, and candidates are normally zero. Two whole-repo circuit breakers remain:
+a walk that returned no issues at all, and one where more than a tenth of the
+mirrored issues went missing at once.
+
 `config/repos.yaml` ships the pilot trio active (reactlog, shinytest2,
 py-shinylive); uncomment the rest of the shinyverse when ready to run the full
 fleet.
