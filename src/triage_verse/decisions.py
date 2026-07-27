@@ -9,7 +9,14 @@ from datetime import datetime, timezone
 from . import jsonl_log
 
 
-def record(proposal: dict, verdict: str, *, params: dict | None = None) -> dict:
+def record(
+    proposal: dict,
+    verdict: str,
+    *,
+    params: dict | None = None,
+    decided_by: str,
+    reason: str | None = None,
+) -> dict:
     rec = {
         "id": uuid.uuid4().hex,
         "proposal_id": proposal["id"],
@@ -19,10 +26,13 @@ def record(proposal: dict, verdict: str, *, params: dict | None = None) -> dict:
         "params": proposal["params"] if params is None else params,
         "verdict": verdict,
         "confidence": proposal.get("confidence"),
+        "decided_by": decided_by,
         "decided_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     if params is not None:
         rec["proposed_params"] = proposal["params"]
+    if reason:
+        rec["reason"] = reason
     return rec
 
 

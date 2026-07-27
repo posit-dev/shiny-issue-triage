@@ -41,7 +41,8 @@ def _setup(tmp_path, proposal_records, verdicts):
     }
     jsonl_log.append_weekly(proposal_records, dirs["proposals_dir"])
     decision_records = [
-        decisions.record(p, verdict) for p, verdict in zip(proposal_records, verdicts)
+        decisions.record(p, verdict, decided_by="alice")
+        for p, verdict in zip(proposal_records, verdicts)
     ]
     jsonl_log.append_weekly(decision_records, dirs["decisions_dir"])
     con = db.connect(":memory:")

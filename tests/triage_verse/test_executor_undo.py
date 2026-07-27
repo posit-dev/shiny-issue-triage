@@ -49,7 +49,7 @@ def _run_batch(tmp_path, proposal_records, gh):
     }
     jsonl_log.append_weekly(proposal_records, dirs["proposals_dir"])
     jsonl_log.append_weekly(
-        [decisions.record(p, "approved") for p in proposal_records],
+        [decisions.record(p, "approved", decided_by="alice") for p in proposal_records],
         dirs["decisions_dir"],
     )
     con = db.connect(":memory:")

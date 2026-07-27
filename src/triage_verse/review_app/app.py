@@ -6,6 +6,7 @@ Run with: shiny run src/triage_verse/review_app/app.py
 
 from __future__ import annotations
 
+import getpass
 import json
 import os
 import pathlib
@@ -563,7 +564,12 @@ def server(input: Inputs, output: Outputs, session: Session):
     def on_decide(proposal: dict, verdict: str, params: dict | None = None) -> None:
         _select(proposal)
         decisions.write(
-            [decisions.record(proposal, verdict, params=params)], DECISIONS_DIR
+            [
+                decisions.record(
+                    proposal, verdict, params=params, decided_by=getpass.getuser()
+                )
+            ],
+            DECISIONS_DIR,
         )
         state = drawer_state.get()
         if state is not None and state["proposal"]["id"] == proposal["id"]:
@@ -789,7 +795,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     def _approve_visible():
         decisions.write(
             [
-                decisions.record(p, "approved")
+                decisions.record(p, "approved", decided_by=getpass.getuser())
                 for p in queue.get()
                 if p["action"] not in review_queue.HIGH_STAKES_ACTIONS
             ],
