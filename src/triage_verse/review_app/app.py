@@ -538,22 +538,38 @@ def server(input: Inputs, output: Outputs, session: Session):
     selected = reactive.value[int | None](None)
     edit_target = reactive.value[dict | None](None)
     reject_target = reactive.value[dict | None](None)
-    # The row Reject button lives in a Shiny module. Building the reject modal
-    # from that module's reactive context would namespace the modal's input ids
-    # (e.g. "prop_x-reject_save"), so the top-level `_reject_save` handler never
-    # fires and the reject silently no-ops. Route the module trigger through
-    # this request relay: the module callback only bumps `reject_request`, and a
-    # top-level effect builds the modal in the root session (un-namespaced ids).
-    # Keyboard/drawer rejects already run at top level and open the modal
-    # directly. The plain counter guarantees a distinct value each time so
-    # re-rejecting the same row still fires the effect.
-    _reject_seq = {"n": 0}
-    reject_request = reactive.value[tuple[int, dict] | None](None)
     wired: set[str] = set()
 
-    def _request_reject(proposal: dict) -> None:
-        _reject_seq["n"] += 1
-        reject_request.set((_reject_seq["n"], proposal))
+    def _module_modal_relay(
+        opener: Callable[[dict], None],
+    ) -> Callable[[dict], None]:
+        """Return a `request(proposal)` callable safe to invoke from a Shiny module.
+
+        The Queue rows are Shiny modules. Opening a modal directly from a
+        module's reactive context namespaces the modal's input ids (e.g.
+        "prop_x-edit_save"), so the top-level `@reactive.event` save handler
+        never fires and the action silently no-ops. This relays the trigger to a
+        top-level effect that calls `opener` in the root session, where the
+        modal's ids are un-namespaced. The plain (non-reactive) counter makes
+        each request distinct, so re-triggering on the same proposal still fires
+        the effect. Keyboard/drawer paths already run at top level and call the
+        opener directly, so they don't go through the relay.
+        """
+        seq = {"n": 0}
+        request = reactive.value[tuple[int, dict] | None](None)
+
+        @reactive.effect
+        @reactive.event(request)
+        def _open():
+            req = request.get()
+            if req is not None:
+                opener(req[1])
+
+        def _request(proposal: dict) -> None:
+            seq["n"] += 1
+            request.set((seq["n"], proposal))
+
+        return _request
 
     def refresh() -> None:
         queue.set(
@@ -690,14 +706,11 @@ def server(input: Inputs, output: Outputs, session: Session):
         ui.modal_remove()
         on_decide(proposal, "rejected", reason=reason)
 
-    @reactive.effect
-    @reactive.event(reject_request)
-    def _reject_request_opens_modal():
-        # Runs in the top-level session context (see `_request_reject`), so the
-        # modal's input ids are un-namespaced and `_reject_save` can see them.
-        req = reject_request.get()
-        if req is not None:
-            _open_reject_modal(req[1])
+    # Row buttons live in a Shiny module; route their modal triggers through the
+    # top-level relay so the modal input ids stay un-namespaced (see
+    # `_module_modal_relay`). Keyboard/drawer paths call the openers directly.
+    _request_reject = _module_modal_relay(_open_reject_modal)
+    _request_edit = _module_modal_relay(on_edit)
 
     @reactive.effect
     @reactive.event(input.key_action)
@@ -763,7 +776,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                     proposal=proposal,
                     on_decide=on_decide,
                     on_open=on_open,
-                    on_edit=on_edit,
+                    on_edit=_request_edit,
                     on_reject=_request_reject,
                 )
                 wired.add(row_id)
