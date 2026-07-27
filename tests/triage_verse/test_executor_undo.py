@@ -1,6 +1,7 @@
 """Round-trip tests for executor.undo."""
 
 import importlib.util
+import json
 import pathlib
 
 from triage_verse import db, decisions, executor, jsonl_log
@@ -167,6 +168,115 @@ def test_undo_does_not_remove_preexisting_label(tmp_path, gh_relay):
         log=lambda *a: None,
     )
     assert gh.issues[("o/r", 1)]["labels"] == ["regression"]
+
+
+def test_undo_link_duplicate_deletes_the_comment_and_does_not_reopen():
+    """link-duplicate closed nothing, so its reversal is the comment alone."""
+    rec = {
+        "action": "link-duplicate",
+        "params": {"canonical": "o/other#3"},
+        "prior": {"labels": [], "state": "open", "state_reason": None},
+        "comment_id": 555,
+    }
+
+    muts = executor._reverse_mutations(rec)
+
+    assert muts == [{"kind": "delete-comment", "comment_id": 555}]
+    assert not any(m["kind"] == "reopen" for m in muts)
+
+
+def test_undo_suggest_transfer_removes_the_transfer_label():
+    rec = {
+        "action": "suggest-transfer",
+        "params": {"canonical": "o/other#3"},
+        "prior": {"labels": ["bug"], "state": "open", "state_reason": None},
+    }
+
+    muts = executor._reverse_mutations(rec)
+
+    assert muts == [{"kind": "remove-label", "label": executor.TRANSFER_LABEL}]
+
+
+def test_undo_suggest_transfer_keeps_a_preexisting_transfer_label():
+    rec = {
+        "action": "suggest-transfer",
+        "params": {"canonical": "o/other#3"},
+        "prior": {
+            "labels": [executor.TRANSFER_LABEL],
+            "state": "open",
+            "state_reason": None,
+        },
+    }
+
+    assert executor._reverse_mutations(rec) == []
+
+
+def test_undo_of_an_action_without_a_rule_is_not_reported_as_applied(
+    tmp_path, gh_relay
+):
+    """An action with no reversal rule must not look like a successful undo.
+
+    `_reverse_mutations` returns None for it (distinct from the empty list an
+    existing rule may legitimately compute), so undo records `not-reversible`
+    instead of `applied` -- which also leaves the record retryable once a rule
+    exists, since `already_undone` only counts applied undos.
+    """
+    gh = FakeGh({("o/r", 1): _issue()})
+    gh_relay.install(gh)
+    con, dirs, batch_id = _run_batch(
+        tmp_path, [_proposal("p1", "add-label", {"label": "regression"})], gh
+    )
+    # Rewrite the applied result to an action the reverser knows nothing about.
+    path = next((dirs["results_dir"]).glob("**/*.jsonl"))
+    lines = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        rec = json.loads(line)
+        rec["action"] = "make-coffee"
+        lines.append(json.dumps(rec))
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    before = len(gh.mutating_calls)
+
+    summary = executor.undo(
+        con,
+        results_dir=dirs["results_dir"],
+        batch_id=batch_id,
+        run_gh=gh,
+        apply=True,
+        pace=lambda s: None,
+        log=lambda *a: None,
+    )
+
+    assert summary["counts"]["not-reversible"] == 1
+    assert summary["counts"]["applied"] == 0
+    assert len(gh.mutating_calls) == before
+    statuses = [
+        json.loads(line)["status"]
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if json.loads(line).get("action") == "undo"
+    ]
+    assert statuses == ["not-reversible"]
+
+
+def test_undo_of_an_already_present_label_is_still_a_success(tmp_path, gh_relay):
+    """An empty reversal from a rule that ran is 'nothing to do', not an error."""
+    gh = FakeGh({("o/r", 1): _issue(labels=["regression"])})
+    gh_relay.install(gh)
+    con, dirs, batch_id = _run_batch(
+        tmp_path, [_proposal("p1", "add-label", {"label": "regression"})], gh
+    )
+
+    summary = executor.undo(
+        con,
+        results_dir=dirs["results_dir"],
+        batch_id=batch_id,
+        run_gh=gh,
+        apply=True,
+        pace=lambda s: None,
+        log=lambda *a: None,
+    )
+
+    assert summary["counts"]["applied"] == 1
+    assert summary["counts"]["not-reversible"] == 0
 
 
 def test_undo_issue_filter(tmp_path, gh_relay):
