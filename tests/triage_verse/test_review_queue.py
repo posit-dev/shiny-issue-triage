@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from triage_verse import db, jsonl_log, review_queue
 
 
@@ -556,3 +558,82 @@ def test_clamp_index():
     assert review_queue.clamp_index(-1, 5) == 0
     assert review_queue.clamp_index(2, 5) == 2
     assert review_queue.clamp_index(7, 5) == 4  # queue shrank under selection
+
+
+def test_transfer_destination_from_canonical_ref():
+    rec = {"params": {"canonical": "posit-dev/py-shiny#12"}}
+    assert review_queue.transfer_destination(rec) == "posit-dev/py-shiny"
+
+
+def test_transfer_destination_from_canonical_url():
+    rec = {"params": {"canonical": "https://github.com/posit-dev/py-shiny/issues/12"}}
+    assert review_queue.transfer_destination(rec) == "posit-dev/py-shiny"
+
+
+@pytest.mark.parametrize(
+    "params", [{}, {"canonical": None}, {"canonical": "nonsense"}, {"canonical": 7}]
+)
+def test_transfer_destination_none_when_unparseable(params):
+    assert review_queue.transfer_destination({"params": params}) is None
+
+
+def _tdec(pid, verdict, at, action="suggest-transfer"):
+    return {
+        "id": f"d-{pid}-{at}",
+        "proposal_id": pid,
+        "repo": "r/a",
+        "issue": 1,
+        "action": action,
+        "params": {"canonical": "r/b#2", "cross_repo_option": "transfer"},
+        "verdict": verdict,
+        "confidence": 0.9,
+        "decided_at": at,
+    }
+
+
+def test_pending_transfers_lists_approved_only(tmp_path):
+    d = tmp_path / "decisions"
+    d.mkdir()
+    (d / "a.jsonl").write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                _tdec("p1", "approved", "2026-07-01T00:00:00Z"),
+                _tdec("p2", "rejected", "2026-07-02T00:00:00Z"),
+                _tdec("p3", "approved", "2026-07-03T00:00:00Z"),
+                _tdec("p4", "approved", "2026-07-04T00:00:00Z", action="add-label"),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    rows = review_queue.pending_transfers(d)
+    assert [r["proposal_id"] for r in rows] == ["p3", "p1"]
+
+
+def test_pending_transfers_drops_marked_transferred(tmp_path):
+    d = tmp_path / "decisions"
+    d.mkdir()
+    (d / "a.jsonl").write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                _tdec("p1", "approved", "2026-07-01T00:00:00Z"),
+                _tdec("p1", "transferred", "2026-07-05T00:00:00Z"),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert review_queue.pending_transfers(d) == []
+
+
+def test_transferred_is_terminal_so_it_does_not_return_to_the_queue():
+    assert "transferred" in review_queue.TERMINAL_VERDICTS
+
+
+def test_new_actions_are_supported_but_not_high_stakes():
+    assert {"link-duplicate", "suggest-transfer"} <= review_queue.SUPPORTED_ACTIONS
+    assert not (
+        {"link-duplicate", "suggest-transfer"} & review_queue.HIGH_STAKES_ACTIONS
+    )

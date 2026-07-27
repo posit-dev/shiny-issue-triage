@@ -12,7 +12,16 @@ from . import db
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_ACTIONS = frozenset({"add-label", "set-priority", "close", "close-duplicate"})
+SUPPORTED_ACTIONS = frozenset(
+    {
+        "add-label",
+        "set-priority",
+        "close",
+        "close-duplicate",
+        "link-duplicate",
+        "suggest-transfer",
+    }
+)
 # Actions that must be judged from the full-evidence drawer, never a row snippet
 # or bulk approve.
 HIGH_STAKES_ACTIONS = frozenset({"close", "close-duplicate"})
@@ -81,10 +90,13 @@ def _is_closed(con: sqlite3.Connection, repo: str, number: int) -> bool:
     return issue is not None and issue["state"] != "OPEN"
 
 
+# Recorded when a human confirms they moved an issue a suggest-transfer proposal
+# pointed at. Terminal so the proposal cannot bounce back into the main queue.
+TRANSFER_DONE_VERDICT = "transferred"
 # Verdicts that remove a proposal from the queue for good (subject to a stale
 # bounce). "skipped" is deliberately NOT here: skip means "not now", so the
 # proposal is kept and merely demoted (see below).
-TERMINAL_VERDICTS = frozenset({"approved", "edited", "rejected"})
+TERMINAL_VERDICTS = frozenset({"approved", "edited", "rejected", TRANSFER_DONE_VERDICT})
 
 
 def _issue_updated_after(
@@ -178,6 +190,43 @@ def duplicate_sibling(proposal: dict) -> tuple[str, int] | None:
         if (repo, number) != (proposal["repo"], proposal["issue"]):
             return repo, number
     return None
+
+
+_CANONICAL_REF = re.compile(
+    r"^(?:([\w.-]+/[\w.-]+)#\d+|https://github\.com/([\w.-]+/[\w.-]+)/issues/\d+)$"
+)
+
+
+def transfer_destination(record: dict) -> str | None:
+    """Repo a suggest-transfer points at, from `params.canonical`.
+
+    Works for proposal and decision records alike: decisions carry `params` but
+    not `evidence`, so the canonical ref is the only shared source.
+    """
+    canonical = (record.get("params") or {}).get("canonical")
+    if not isinstance(canonical, str):
+        return None
+    m = _CANONICAL_REF.match(canonical.strip())
+    if m is None:
+        return None
+    return m.group(1) or m.group(2)
+
+
+def pending_transfers(decisions_dir: str | pathlib.Path) -> list[dict]:
+    """Approved suggest-transfer decisions not yet marked transferred, newest first."""
+    latest: dict[str, dict] = {}
+    for r in iter_jsonl_records(decisions_dir):
+        pid = r.get("proposal_id")
+        if pid is None or r.get("action") != "suggest-transfer":
+            continue
+        cur = latest.get(pid)
+        if cur is None or r.get("decided_at", "") >= cur.get("decided_at", ""):
+            latest[pid] = r
+    return sorted(
+        (d for d in latest.values() if d.get("verdict") in ("approved", "edited")),
+        key=lambda d: d.get("decided_at", ""),
+        reverse=True,
+    )
 
 
 def issue_snippet(title: str, body: str | None, max_chars: int = 280) -> str:
