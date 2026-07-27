@@ -1,6 +1,8 @@
 # tests/triage_verse/test_proposals.py
 import json
 
+import pytest
+
 from triage_verse import db, proposals
 
 
@@ -100,3 +102,61 @@ def test_write_appends_weekly_partition(tmp_path):
     # appends, not overwrites
     proposals.write(recs, tmp_path / "proposals", today="2026-06-29")
     assert len(path.read_text().splitlines()) == 2
+
+
+def _seed_dup(con, option, repo_b="r/b"):
+    """One duplicate verdict between r/a#1 and repo_b#2 with `option`."""
+    for repo, num in (("r/a", 1), (repo_b, 2)):
+        con.execute(
+            "INSERT OR IGNORE INTO issues (repo, number, title, state, created_at,"
+            " updated_at, is_pr) VALUES (?, ?, 'T', 'OPEN',"
+            " '2026-01-01T00:00:00Z', '2026-06-01T00:00:00Z', 0)",
+            (repo, num),
+        )
+    db.upsert_dedup_verdict(
+        con,
+        {
+            "repo_a": "r/a",
+            "number_a": 1,
+            "repo_b": repo_b,
+            "number_b": 2,
+            "hash_a": "ha",
+            "hash_b": "hb",
+            "verdict": "duplicate",
+            "canonical_json": json.dumps(f"{repo_b}#2"),
+            "cross_repo_option": option,
+            "confidence": 0.9,
+            "rationale": "same bug",
+            "model": "claude-sonnet-5",
+            "run_id": "run1",
+            "at": "2026-06-29T00:00:00Z",
+        },
+    )
+    con.commit()
+
+
+@pytest.mark.parametrize(
+    "option,expected",
+    [
+        ("close-and-link", "close-duplicate"),
+        (None, "close-duplicate"),
+        ("nonsense", "close-duplicate"),
+        ("keep-both-link", "link-duplicate"),
+        ("transfer", "suggest-transfer"),
+    ],
+)
+def test_build_maps_cross_repo_option_to_action(tmp_path, option, expected):
+    con = db.connect(tmp_path / "m.sqlite")
+    _seed_dup(con, option)
+    recs = [r for r in proposals.build(con, "run1") if r["repo"] == "r/a"]
+    assert [r["action"] for r in recs] == [expected]
+    assert recs[0]["params"]["canonical"] == "r/b#2"
+    assert recs[0]["params"]["cross_repo_option"] == option
+
+
+@pytest.mark.parametrize("option", ["transfer", "keep-both-link"])
+def test_same_repo_pair_ignores_cross_repo_option(tmp_path, option):
+    con = db.connect(tmp_path / "m.sqlite")
+    _seed_dup(con, option, repo_b="r/a")
+    recs = [r for r in proposals.build(con, "run1") if r["repo"] == "r/a"]
+    assert [r["action"] for r in recs] == ["close-duplicate"]
