@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS classifications (
   model TEXT NOT NULL,
   run_id TEXT NOT NULL,
   at TEXT NOT NULL,
-  PRIMARY KEY (repo, number)
+  PRIMARY KEY (repo, number, run_id)
 );
 CREATE TABLE IF NOT EXISTS dedup_verdicts (
   repo_a TEXT NOT NULL, number_a INTEGER NOT NULL,
@@ -102,7 +102,7 @@ CREATE TABLE IF NOT EXISTS dedup_verdicts (
   model TEXT NOT NULL,
   run_id TEXT NOT NULL,
   at TEXT NOT NULL,
-  PRIMARY KEY (repo_a, number_a, repo_b, number_b)
+  PRIMARY KEY (repo_a, number_a, repo_b, number_b, run_id)
 );
 CREATE TABLE IF NOT EXISTS batches (
   batch_id TEXT PRIMARY KEY,
@@ -132,6 +132,26 @@ CREATE TABLE IF NOT EXISTS issue_vectors (
   embed_hash TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   UNIQUE (repo, number)
+);
+"""
+
+SCHEMA_VIEWS = """
+CREATE VIEW IF NOT EXISTS classifications_latest AS
+SELECT c.* FROM classifications c
+WHERE c.rowid = (
+  SELECT c2.rowid FROM classifications c2
+  WHERE c2.repo = c.repo AND c2.number = c.number
+  ORDER BY c2.at DESC, c2.rowid DESC
+  LIMIT 1
+);
+CREATE VIEW IF NOT EXISTS dedup_verdicts_latest AS
+SELECT d.* FROM dedup_verdicts d
+WHERE d.rowid = (
+  SELECT d2.rowid FROM dedup_verdicts d2
+  WHERE d2.repo_a = d.repo_a AND d2.number_a = d.number_a
+    AND d2.repo_b = d.repo_b AND d2.number_b = d.number_b
+  ORDER BY d2.at DESC, d2.rowid DESC
+  LIMIT 1
 );
 """
 
@@ -181,6 +201,38 @@ _CURSOR_KINDS = {
 _BATCH_MUTABLE = frozenset({"status", "ended_at", "error", "provider_batch_id"})
 
 
+_SCHEMA_VERSION = 1
+
+
+def _pk_has_run_id(con: sqlite3.Connection, table: str) -> bool:
+    return any(
+        r["name"] == "run_id" and r["pk"] > 0
+        for r in con.execute(f"PRAGMA table_info({table})")
+    )
+
+
+def _rebuild_with_run_id_pk(
+    con: sqlite3.Connection, table: str, columns: tuple[str, ...]
+) -> None:
+    cols = ", ".join(columns)
+    con.execute(f"ALTER TABLE {table} RENAME TO {table}_old")
+    con.executescript(SCHEMA)  # recreates {table} with the new PK (IF NOT EXISTS)
+    con.execute(f"INSERT INTO {table} ({cols}) SELECT {cols} FROM {table}_old")
+    con.execute(f"DROP TABLE {table}_old")
+
+
+def _migrate(con: sqlite3.Connection) -> None:
+    """Bring an existing mirror up to the run_id-keyed decision-table schema."""
+    if con.execute("PRAGMA user_version").fetchone()[0] >= _SCHEMA_VERSION:
+        return
+    if not _pk_has_run_id(con, "classifications"):
+        _rebuild_with_run_id_pk(con, "classifications", CLASSIFICATION_COLUMNS)
+    if not _pk_has_run_id(con, "dedup_verdicts"):
+        _rebuild_with_run_id_pk(con, "dedup_verdicts", DEDUP_COLUMNS)
+    con.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+    con.commit()
+
+
 def connect(path: str | pathlib.Path) -> sqlite3.Connection:
     con = sqlite3.connect(path)
     con.row_factory = sqlite3.Row
@@ -195,6 +247,8 @@ def connect(path: str | pathlib.Path) -> sqlite3.Connection:
     sqlite_vec.load(con)
     con.enable_load_extension(False)
     con.executescript(SCHEMA)
+    _migrate(con)
+    con.executescript(SCHEMA_VIEWS)
     con.execute(
         f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_issues "
         f"USING vec0(embedding float[{VEC_DIM}] distance_metric=cosine)"
@@ -331,14 +385,21 @@ DEDUP_COLUMNS = (
 
 
 def upsert_classification(con: sqlite3.Connection, row: dict) -> None:
-    _upsert(con, "classifications", CLASSIFICATION_COLUMNS, ("repo", "number"), row)
+    _upsert(
+        con,
+        "classifications",
+        CLASSIFICATION_COLUMNS,
+        ("repo", "number", "run_id"),
+        row,
+    )
 
 
 def get_classification(
     con: sqlite3.Connection, repo: str, number: int
 ) -> sqlite3.Row | None:
     return con.execute(
-        "SELECT * FROM classifications WHERE repo=? AND number=?", (repo, number)
+        "SELECT * FROM classifications_latest WHERE repo=? AND number=?",
+        (repo, number),
     ).fetchone()
 
 
@@ -347,7 +408,7 @@ def upsert_dedup_verdict(con: sqlite3.Connection, row: dict) -> None:
         con,
         "dedup_verdicts",
         DEDUP_COLUMNS,
-        ("repo_a", "number_a", "repo_b", "number_b"),
+        ("repo_a", "number_a", "repo_b", "number_b", "run_id"),
         row,
     )
 
@@ -356,7 +417,8 @@ def get_dedup_verdict(
     con: sqlite3.Connection, repo_a: str, number_a: int, repo_b: str, number_b: int
 ) -> sqlite3.Row | None:
     return con.execute(
-        "SELECT * FROM dedup_verdicts WHERE repo_a=? AND number_a=? AND repo_b=? AND number_b=?",
+        "SELECT * FROM dedup_verdicts_latest "
+        "WHERE repo_a=? AND number_a=? AND repo_b=? AND number_b=?",
         (repo_a, number_a, repo_b, number_b),
     ).fetchone()
 
