@@ -214,6 +214,35 @@ def row_server(
         on_edit(proposal)
 
 
+@module.ui
+def transfer_row_ui(decision: dict, dest: str):
+    url = f"https://github.com/{decision['repo']}/issues/{decision['issue']}"
+    return ui.card(
+        ui.card_header(f"{decision['repo']}#{decision['issue']} → {dest}"),
+        ui.p(f"decided {decision.get('decided_at', '(unknown)')}"),
+        ui.p(ui.a("Open on GitHub ↗", href=url, target="_blank")),
+        ui.input_action_button(
+            "mark_done",
+            "Mark transferred",
+            style="background-color: #00695c; color: white;",
+        ),
+    )
+
+
+@module.server
+def transfer_row_server(
+    input: Inputs,
+    output: Outputs,
+    session: Session,
+    decision: dict,
+    on_done: Callable[[dict], None],
+):
+    @reactive.effect
+    @reactive.event(input.mark_done)
+    def _mark_done():
+        on_done(decision)
+
+
 def _table(rows: list[dict], columns: list[str], format_row=None) -> ui.Tag:
     if not rows:
         return ui.p("no data", class_="text-muted")
@@ -289,6 +318,12 @@ def app_audit_reject(item: dict, *, decisions_dir=DECISIONS_DIR) -> str:
         f"triage-verse undo --batch {item['batch_id']}"
         f" --issue {item['repo']}#{item['issue']} --apply"
     )
+
+
+def app_mark_transferred(decision: dict, *, decisions_dir=DECISIONS_DIR) -> str:
+    """Record that a human moved the issue this suggest-transfer pointed at."""
+    decisions.write([decisions.record_transferred(decision)], decisions_dir)
+    return decision["proposal_id"]
 
 
 def app_tier2_label(repo: str, number: int, *, run_gh=gh.run_gh) -> None:
@@ -535,6 +570,19 @@ skipped_panel = ui.nav_panel(
 )
 
 
+transfers_panel = ui.nav_panel(
+    "Transfers",
+    ui.h4("Transfer worklist"),
+    ui.p(
+        "Approved transfer suggestions. Approving applied the 'wrong location' "
+        "label; moving the issue is manual. Open it on GitHub, use Transfer "
+        "issue in the sidebar, then mark it done here.",
+        class_="text-muted",
+    ),
+    ui.output_ui("transfers_ui"),
+)
+
+
 audit_panel = ui.nav_panel(
     "Audit",
     ui.h4("Autonomy spot-audit queue"),
@@ -561,6 +609,7 @@ app_ui = ui.page_navbar(
         ui.output_ui("queue_ui"),
     ),
     skipped_panel,
+    transfers_panel,
     dashboard_panel,
     audit_panel,
     title="Triage review",
@@ -581,6 +630,8 @@ def server(input: Inputs, output: Outputs, session: Session):
     edit_target = reactive.value[dict | None](None)
     reject_target = reactive.value[dict | None](None)
     wired: set[str] = set()
+    transfers_tick = reactive.value(0)
+    transfers_wired: set[str] = set()
 
     def _module_modal_relay(
         opener: Callable[[dict], None],
@@ -850,6 +901,28 @@ def server(input: Inputs, output: Outputs, session: Session):
         if not rows:
             return ui.p("No skipped items.", class_="text-muted")
         return ui.div(*_render_cards(rows, highlight=False))
+
+    def _mark_transferred(decision: dict) -> None:
+        app_mark_transferred(decision)
+        transfers_tick.set(transfers_tick.get() + 1)
+
+    @render.ui
+    def transfers_ui():
+        transfers_tick.get()
+        rows = review_queue.pending_transfers(DECISIONS_DIR)
+        if not rows:
+            return ui.p("No pending transfers.", class_="text-muted")
+        cards = []
+        for d in rows:
+            pid = d["proposal_id"]
+            if not review_queue.valid_module_id(pid):
+                continue
+            dest = review_queue.transfer_destination(d) or "(unknown)"
+            if pid not in transfers_wired:
+                transfer_row_server(pid, decision=d, on_done=_mark_transferred)
+                transfers_wired.add(pid)
+            cards.append(transfer_row_ui(pid, d, dest))
+        return ui.div(*cards)
 
     @render.ui
     def drawer_ui():

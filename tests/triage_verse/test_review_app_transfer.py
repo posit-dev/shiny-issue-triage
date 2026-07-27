@@ -1,5 +1,8 @@
 """Rendering of link-duplicate and suggest-transfer in the review app."""
 
+import json
+
+from triage_verse import review_queue
 from triage_verse.review_app import app
 
 
@@ -67,3 +70,42 @@ def test_destination_badge_renders_leftmost_of_the_other_badges():
     i_dest = html.index("posit-dev/py-shiny")
     assert i_dest < html.index("stale")
     assert i_dest < html.index("not now")
+
+
+def _approved(pid="p1"):
+    return {
+        "id": f"d-{pid}",
+        "proposal_id": pid,
+        "repo": "rstudio/shiny",
+        "issue": 7,
+        "action": "suggest-transfer",
+        "params": {
+            "canonical": "posit-dev/py-shiny#12",
+            "cross_repo_option": "transfer",
+        },
+        "verdict": "approved",
+        "confidence": 0.9,
+        "decided_at": "2026-07-01T00:00:00Z",
+    }
+
+
+def test_mark_transferred_removes_it_from_pending(tmp_path):
+    d = tmp_path / "decisions"
+    d.mkdir()
+    (d / "a.jsonl").write_text(json.dumps(_approved()) + "\n", encoding="utf-8")
+    assert [r["proposal_id"] for r in review_queue.pending_transfers(d)] == ["p1"]
+
+    pid = app.app_mark_transferred(_approved(), decisions_dir=d)
+    assert pid == "p1"
+    assert review_queue.pending_transfers(d) == []
+
+
+def test_mark_transferred_appends_rather_than_rewriting(tmp_path):
+    d = tmp_path / "decisions"
+    d.mkdir()
+    (d / "a.jsonl").write_text(json.dumps(_approved()) + "\n", encoding="utf-8")
+    app.app_mark_transferred(_approved(), decisions_dir=d)
+
+    records = review_queue.iter_jsonl_records(d)
+    verdicts = sorted(r["verdict"] for r in records)
+    assert verdicts == ["approved", "transferred"]
