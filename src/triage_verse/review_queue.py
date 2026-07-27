@@ -232,8 +232,42 @@ def transfer_destination(record: dict) -> str | None:
     return m.group(1) or m.group(2)
 
 
-def pending_transfers(decisions_dir: str | pathlib.Path) -> list[dict]:
-    """Approved suggest-transfer decisions not yet marked transferred, newest first."""
+def _label_applied_proposals(results_dir: str | pathlib.Path) -> set[str]:
+    """Proposals whose suggest-transfer label actually landed on GitHub.
+
+    Reads the results log: a proposal qualifies once it has an `applied`
+    suggest-transfer result that has not since been undone.
+    """
+    applied: dict[str, str] = {}  # result id -> proposal id
+    undone: set[str] = set()
+    for r in iter_jsonl_records(results_dir):
+        if r.get("action") == "undo":
+            if r.get("status") == "applied" and r.get("undoes_result_id"):
+                undone.add(r["undoes_result_id"])
+            continue
+        if (
+            r.get("action") == "suggest-transfer"
+            and r.get("status") == "applied"
+            and r.get("proposal_id")
+            and r.get("id")
+        ):
+            applied[r["id"]] = r["proposal_id"]
+    return {pid for rid, pid in applied.items() if rid not in undone}
+
+
+def pending_transfers(
+    decisions_dir: str | pathlib.Path,
+    results_dir: str | pathlib.Path | None = None,
+) -> list[dict]:
+    """Approved suggest-transfer decisions not yet marked transferred, newest first.
+
+    With `results_dir`, only suggestions whose `wrong location` label has actually
+    been applied by `execute --apply` are listed. That ordering matters: marking a
+    row transferred writes a later, terminal decision for the same proposal, which
+    would cancel a still-unexecuted approval and lose the label silently. Without
+    `results_dir` the list is unfiltered (approval-only), which is what a caller
+    that has no results log can know.
+    """
     latest: dict[str, dict] = {}
     for r in iter_jsonl_records(decisions_dir):
         pid = r.get("proposal_id")
@@ -242,8 +276,12 @@ def pending_transfers(decisions_dir: str | pathlib.Path) -> list[dict]:
         cur = latest.get(pid)
         if cur is None or r.get("decided_at", "") >= cur.get("decided_at", ""):
             latest[pid] = r
+    pending = [d for d in latest.values() if d.get("verdict") in ("approved", "edited")]
+    if results_dir is not None:
+        applied = _label_applied_proposals(results_dir)
+        pending = [d for d in pending if d["proposal_id"] in applied]
     return sorted(
-        (d for d in latest.values() if d.get("verdict") in ("approved", "edited")),
+        pending,
         key=lambda d: d.get("decided_at", ""),
         reverse=True,
     )

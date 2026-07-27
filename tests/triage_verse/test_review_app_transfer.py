@@ -89,6 +89,104 @@ def _approved(pid="p1"):
     }
 
 
+def test_drawer_transfer_does_not_claim_the_label_is_already_applied():
+    """Approval only queues the label; execute --apply applies it."""
+    text = " ".join(str(p) for p in app._drawer_transfer(_proposal("suggest-transfer")))
+    assert "execute --apply" in text
+    assert "Approving applied" not in text
+
+
+def test_transfers_panel_prose_does_not_claim_the_label_is_already_applied():
+    text = str(app.transfers_panel.content)
+    assert "Approving applied" not in text
+    assert "has been " in text and "applied" in text
+
+
+def test_drawer_shows_the_duplicate_sibling_for_link_duplicate():
+    """A link-duplicate posts a public comment naming the canonical, so the
+    reviewer must see the sibling block (and its '(not found in mirror)' state)
+    exactly as for close-duplicate."""
+    parts = app._drawer_proposal(_proposal("link-duplicate"))
+    text = " ".join(str(p) for p in parts)
+    assert "Duplicate sibling" in text
+
+
+def _result(pid="p1", status="applied", rid="r1", action="suggest-transfer"):
+    return {
+        "id": rid,
+        "batch_id": "b1",
+        "decision_id": f"d-{pid}",
+        "proposal_id": pid,
+        "repo": "rstudio/shiny",
+        "issue": 7,
+        "action": action,
+        "status": status,
+        "executed_at": "2026-07-02T00:00:00Z",
+    }
+
+
+def test_pending_transfers_hides_a_suggestion_whose_label_is_not_applied_yet(tmp_path):
+    """Marking a row transferred writes a terminal decision that would cancel a
+    still-unexecuted approval, so the row must not be offered until the
+    'wrong location' label has actually been applied."""
+    d = tmp_path / "decisions"
+    d.mkdir()
+    (d / "a.jsonl").write_text(json.dumps(_approved()) + "\n", encoding="utf-8")
+    r = tmp_path / "results"
+    r.mkdir()
+
+    # No results at all: approved but not executed.
+    assert review_queue.pending_transfers(d, results_dir=r) == []
+
+    # A dry-run result is not an application either.
+    (r / "a.jsonl").write_text(
+        json.dumps(_result(status="dry-run")) + "\n", encoding="utf-8"
+    )
+    assert review_queue.pending_transfers(d, results_dir=r) == []
+
+    # Applied: now it is a real worklist item.
+    with (r / "a.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(_result(rid="r2")) + "\n")
+    assert [
+        x["proposal_id"] for x in review_queue.pending_transfers(d, results_dir=r)
+    ] == ["p1"]
+
+
+def test_pending_transfers_hides_a_suggestion_whose_label_was_undone(tmp_path):
+    d = tmp_path / "decisions"
+    d.mkdir()
+    (d / "a.jsonl").write_text(json.dumps(_approved()) + "\n", encoding="utf-8")
+    r = tmp_path / "results"
+    r.mkdir()
+    (r / "a.jsonl").write_text(
+        json.dumps(_result(rid="r1"))
+        + "\n"
+        + json.dumps(
+            {
+                "id": "u1",
+                "action": "undo",
+                "status": "applied",
+                "undoes_result_id": "r1",
+                "repo": "rstudio/shiny",
+                "issue": 7,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert review_queue.pending_transfers(d, results_dir=r) == []
+
+
+def test_pending_transfers_without_results_dir_stays_approval_only(tmp_path):
+    """Existing callers that pass no results log keep the old behaviour."""
+    d = tmp_path / "decisions"
+    d.mkdir()
+    (d / "a.jsonl").write_text(json.dumps(_approved()) + "\n", encoding="utf-8")
+
+    assert [x["proposal_id"] for x in review_queue.pending_transfers(d)] == ["p1"]
+
+
 def test_mark_transferred_removes_it_from_pending(tmp_path):
     d = tmp_path / "decisions"
     d.mkdir()

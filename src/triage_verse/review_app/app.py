@@ -454,9 +454,11 @@ def _drawer_transfer(proposal: dict) -> list:
     parts.append(ui.p(ui.a(dest, href=f"https://github.com/{dest}", target="_blank")))
     parts.append(
         ui.p(
-            "Approving applies the 'wrong location' label only — it does not move "
-            "the issue. Transfer it by hand on GitHub (Transfer issue, in the "
-            "issue sidebar). It stays on the Transfers tab until you mark it done.",
+            "Approving only queues the 'wrong location' label — the next "
+            "'execute --apply' applies it, and nothing ever moves the issue. "
+            "Transfer it by hand on GitHub (Transfer issue, in the issue sidebar). "
+            "It appears on the Transfers tab once the label has been applied, and "
+            "stays there until you mark it done.",
             class_="text-muted",
         )
     )
@@ -497,7 +499,10 @@ def _drawer_proposal(proposal: dict) -> list:
             style="display: flex; gap: 0.5rem; margin-bottom: 0.75rem;",
         ),
     ]
-    if proposal["action"] == "close-duplicate":
+    # link-duplicate posts a public comment naming the canonical issue, so the
+    # reviewer needs the same sibling block close-duplicate gets -- not least to
+    # see "(not found in mirror)" when the canonical has been retired.
+    if proposal["action"] in ("close-duplicate", "link-duplicate"):
         parts += _drawer_sibling(proposal)
     parts += [
         ui.h4("Linked evidence"),
@@ -574,9 +579,10 @@ transfers_panel = ui.nav_panel(
     "Transfers",
     ui.h4("Transfer worklist"),
     ui.p(
-        "Approved transfer suggestions. Approving applied the 'wrong location' "
-        "label; moving the issue is manual. Open it on GitHub, use Transfer "
-        "issue in the sidebar, then mark it done here.",
+        "Approved transfer suggestions whose 'wrong location' label has been "
+        "applied by 'execute --apply' — approvals still waiting on execution are "
+        "not listed yet. Moving the issue is manual: open it on GitHub, use "
+        "Transfer issue in the sidebar, then mark it done here.",
         class_="text-muted",
     ),
     ui.output_ui("transfers_ui"),
@@ -909,7 +915,10 @@ def server(input: Inputs, output: Outputs, session: Session):
     @render.ui
     def transfers_ui():
         transfers_tick.get()
-        rows = review_queue.pending_transfers(DECISIONS_DIR)
+        # results_dir gates on the label having actually been applied: marking a
+        # row transferred writes a terminal decision that would otherwise cancel a
+        # still-unexecuted approval and drop the 'wrong location' label silently.
+        rows = review_queue.pending_transfers(DECISIONS_DIR, results_dir=RESULTS_DIR)
         if not rows:
             return ui.p("No pending transfers.", class_="text-muted")
         cards = []
