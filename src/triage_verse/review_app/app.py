@@ -168,6 +168,7 @@ def row_server(
     on_decide: Callable[[dict, str], None],
     on_open: Callable[[dict], None],
     on_edit: Callable[[dict], None],
+    on_reject: Callable[[dict], None],
 ):
     @reactive.effect
     @reactive.event(input.open)
@@ -187,7 +188,7 @@ def row_server(
     @reactive.effect
     @reactive.event(input.reject)
     def _reject():
-        on_decide(proposal, "rejected")
+        on_reject(proposal)
 
     @reactive.effect
     @reactive.event(input.skip)
@@ -536,6 +537,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     drawer_state = reactive.value[dict | None](None)
     selected = reactive.value[int | None](None)
     edit_target = reactive.value[dict | None](None)
+    reject_target = reactive.value[dict | None](None)
     wired: set[str] = set()
 
     def refresh() -> None:
@@ -628,6 +630,44 @@ def server(input: Inputs, output: Outputs, session: Session):
         ui.modal_remove()
         on_decide(proposal, "edited", params=params)
 
+    def _open_reject_modal(proposal: dict) -> None:
+        _select(proposal)
+        reject_target.set(proposal)
+        ui.modal_show(
+            ui.modal(
+                ui.p(_row_label(proposal)),
+                ui.p(
+                    proposal.get("rationale") or "(no rationale)", class_="text-muted"
+                ),
+                ui.input_text_area(
+                    "reject_reason",
+                    "Reason (optional)",
+                    value="",
+                    placeholder="why was this wrong?",
+                    width="100%",
+                ),
+                title="Reject proposal",
+                footer=[
+                    ui.input_action_button(
+                        "reject_save", "Confirm reject", class_="btn btn-danger"
+                    ),
+                    ui.modal_button("Cancel"),
+                ],
+                easy_close=True,
+            )
+        )
+
+    @reactive.effect
+    @reactive.event(input.reject_save)
+    def _reject_save():
+        proposal = reject_target.get()
+        if proposal is None:
+            return
+        reason = input.reject_reason().strip() or None
+        reject_target.set(None)
+        ui.modal_remove()
+        on_decide(proposal, "rejected", reason=reason)
+
     @reactive.effect
     @reactive.event(input.key_action)
     def _key_action():
@@ -657,7 +697,10 @@ def server(input: Inputs, output: Outputs, session: Session):
                 # screen — route the keypress to the drawer instead.
                 on_open(proposal)
             else:
-                on_decide(proposal, "approved" if action == "approve" else "rejected")
+                if action == "approve":
+                    on_decide(proposal, "approved")
+                else:
+                    _open_reject_modal(proposal)
         elif action == "skip":
             on_decide(rows[sel], "skipped")
         elif action == "edit":
@@ -690,6 +733,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                     on_decide=on_decide,
                     on_open=on_open,
                     on_edit=on_edit,
+                    on_reject=_open_reject_modal,
                 )
                 wired.add(row_id)
             cards.append(
@@ -753,7 +797,9 @@ def server(input: Inputs, output: Outputs, session: Session):
     @reactive.effect
     @reactive.event(input.drawer_reject)
     def _drawer_reject():
-        _decide_from_drawer("rejected")
+        state = drawer_state.get()
+        if state is not None:
+            _open_reject_modal(state["proposal"])
 
     @reactive.effect
     @reactive.event(input.drawer_skip)
