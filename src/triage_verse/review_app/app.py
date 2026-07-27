@@ -100,19 +100,6 @@ def row_ui(proposal: dict, snippet: str):
                 ),
             ),
         )
-    if proposal["action"] == "suggest-transfer":
-        dest = review_queue.transfer_destination(proposal)
-        header.insert(
-            0,
-            ui.span(
-                f"→ {dest}" if dest else "transfer",
-                style=(
-                    "background-color: #00695c; color: white; border-radius: 999px; "
-                    "padding: 0 0.5rem; margin-right: 0.5rem; font-size: 0.8rem;"
-                ),
-                title="Suggested transfer; a maintainer must move this on GitHub.",
-            ),
-        )
     if proposal.get("stale"):
         header.insert(
             0,
@@ -135,6 +122,19 @@ def row_ui(proposal: dict, snippet: str):
                     "padding: 0 0.5rem; margin-right: 0.5rem; font-size: 0.8rem;"
                 ),
                 title="Skipped for now; still here until decided or the issue updates.",
+            ),
+        )
+    if proposal["action"] == "suggest-transfer":
+        dest = review_queue.transfer_destination(proposal)
+        header.insert(
+            0,
+            ui.span(
+                f"→ {dest}" if dest else "transfer",
+                style=(
+                    "background-color: #00695c; color: white; border-radius: 999px; "
+                    "padding: 0 0.5rem; margin-right: 0.5rem; font-size: 0.8rem;"
+                ),
+                title="Suggested transfer; a maintainer must move this on GitHub.",
             ),
         )
     if high_stakes:

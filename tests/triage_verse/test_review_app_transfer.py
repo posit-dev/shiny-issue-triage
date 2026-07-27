@@ -52,3 +52,18 @@ def test_drawer_transfer_handles_a_missing_destination():
     parts = app._drawer_transfer(_proposal("suggest-transfer", canonical=None))
     text = " ".join(str(p) for p in parts)
     assert "not identified" in text
+
+
+def test_destination_badge_renders_leftmost_of_the_other_badges():
+    """The destination badge must precede the stale and not-now badges.
+
+    The relative order of `stale` and `not now` between themselves is
+    pre-existing behaviour of those two blocks and is not asserted here.
+    """
+    p = _proposal("suggest-transfer")
+    p["stale"] = True
+    p["deferred"] = True
+    html = str(app.row_ui("p1", p, "snippet"))
+    i_dest = html.index("posit-dev/py-shiny")
+    assert i_dest < html.index("stale")
+    assert i_dest < html.index("not now")
