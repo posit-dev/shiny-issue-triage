@@ -538,7 +538,22 @@ def server(input: Inputs, output: Outputs, session: Session):
     selected = reactive.value[int | None](None)
     edit_target = reactive.value[dict | None](None)
     reject_target = reactive.value[dict | None](None)
+    # The row Reject button lives in a Shiny module. Building the reject modal
+    # from that module's reactive context would namespace the modal's input ids
+    # (e.g. "prop_x-reject_save"), so the top-level `_reject_save` handler never
+    # fires and the reject silently no-ops. Route the module trigger through
+    # this request relay: the module callback only bumps `reject_request`, and a
+    # top-level effect builds the modal in the root session (un-namespaced ids).
+    # Keyboard/drawer rejects already run at top level and open the modal
+    # directly. The plain counter guarantees a distinct value each time so
+    # re-rejecting the same row still fires the effect.
+    _reject_seq = {"n": 0}
+    reject_request = reactive.value[tuple[int, dict] | None](None)
     wired: set[str] = set()
+
+    def _request_reject(proposal: dict) -> None:
+        _reject_seq["n"] += 1
+        reject_request.set((_reject_seq["n"], proposal))
 
     def refresh() -> None:
         queue.set(
@@ -676,6 +691,15 @@ def server(input: Inputs, output: Outputs, session: Session):
         on_decide(proposal, "rejected", reason=reason)
 
     @reactive.effect
+    @reactive.event(reject_request)
+    def _reject_request_opens_modal():
+        # Runs in the top-level session context (see `_request_reject`), so the
+        # modal's input ids are un-namespaced and `_reject_save` can see them.
+        req = reject_request.get()
+        if req is not None:
+            _open_reject_modal(req[1])
+
+    @reactive.effect
     @reactive.event(input.key_action)
     def _key_action():
         action = input.key_action()
@@ -740,7 +764,7 @@ def server(input: Inputs, output: Outputs, session: Session):
                     on_decide=on_decide,
                     on_open=on_open,
                     on_edit=on_edit,
-                    on_reject=_open_reject_modal,
+                    on_reject=_request_reject,
                 )
                 wired.add(row_id)
             cards.append(
