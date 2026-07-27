@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- **No schema migration.** `dedup_verdicts.cross_repo_option` already exists. Do not add columns and do not bump `_SCHEMA_VERSION`.
+- **No schema migration.** `dedup_verdicts.cross_repo_option` already exists. Do not add columns and do not bump `_SCHEMA_VERSION` — Task 10 deletes rows from existing tables rather than adding state.
 - **Do not modify `gh.py`.** `ALLOWED_OPERATIONS` and `ALLOWED_MUTATION_FIELDS` must not gain `transferIssue` or any other entry. A transfer mutation must keep failing closed.
 - **The pipeline never transfers an issue.** No task may emit a `transferIssue` mutation or a new mutation `kind`. Only the existing kinds `add-label`, `remove-label`, `comment`, `close`, `close-duplicate` may appear.
 - **Primary gate:** `make py-check` (ruff format + lint, pyright, pytest) must pass before any task is considered done.
@@ -1232,6 +1232,358 @@ git commit -m "feat(review-app): Transfers worklist for approved transfer sugges
 
 ---
 
+### Task 10: Reconcile issues GitHub no longer has
+
+**Why this task exists.** When an issue is transferred from repo A to repo B, GitHub assigns a new number in B and the issue leaves A entirely. `sync` is upsert-only and never deletes, so the source row is frozen at `state = 'OPEN'` forever — no future sync will ever touch it again, because it no longer appears in repo A's issue connection.
+
+That ghost row breaks duplicate detection in a way this feature makes actively dangerous. `candidate_pairs` sources from `i.state='OPEN'`, so the ghost qualifies; `db.knn` has **no state filter**, so the ghost's vector is also returned as a neighbour. The transferred issue B#N has byte-identical title and body, so cosine is ≈1.0 — far above the 0.80 threshold. The pair is cross-repo with no cached verdict, so it goes to the model, which sees two identical issues in two repos and answers `close-and-link` (proposing to close the **live** issue as a duplicate of one that no longer exists) or `transfer` (proposing to move it back). Before this plan `transfer` was inert; afterwards it is actionable, so the pipeline could recommend a transfer loop.
+
+**Why deletion rather than marking.** Marking the ghost `CLOSED` is not stable: `embed_repo` selects `WHERE repo=? AND is_pr=0` with no state filter, so the next `embed` run re-creates any vector that was deleted while the `issues` row survives. Adding a state filter to `embed_repo` is not an option — the index intentionally covers closed issues, which duplicate detection needs. So the row must go.
+
+**Why sync-side rather than at "Mark transferred".** Reconciliation is trigger-independent: it catches a maintainer transferring an issue on their own initiative, which the review app never hears about. It therefore subsumes any per-decision cleanup, so Task 9 needs no change.
+
+**Files:**
+- Modify: `src/triage_verse/db.py` (append `delete_issue`)
+- Modify: `src/triage_verse/sync.py:97-110` (`sync_issues` collects seen numbers, reconciles on full) and `:240-259` (`sync_all` passes `log` through)
+- Modify: `src/triage_verse/review_queue.py:79-81` (replace `_is_closed`) and `:146-151` (its call site)
+- Test: `tests/triage_verse/test_sync_reconcile.py` (create), `tests/triage_verse/test_review_queue.py`
+
+**Interfaces:**
+- Consumes: nothing from Tasks 1-9.
+- Produces: `db.delete_issue(con, repo: str, number: int) -> None`; `sync.reconcile_repo(con, repo: str, seen: set[int]) -> list[int]` returning the deleted numbers sorted ascending; `review_queue._not_reviewable(con, repo: str, number: int) -> bool`.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `tests/triage_verse/test_sync_reconcile.py`:
+
+```python
+"""Reconciling mirrored issues that GitHub no longer lists (transferred/deleted)."""
+
+from triage_verse import candidates, db, embed, sync
+
+
+def _insert(con, repo, number, title="T", body="B", state="OPEN"):
+    con.execute(
+        "INSERT INTO issues (repo, number, title, body, state, created_at,"
+        " updated_at, is_pr) VALUES (?, ?, ?, ?, ?, '2026-01-01T00:00:00Z',"
+        " '2026-06-01T00:00:00Z', 0)",
+        (repo, number, title, body, state),
+    )
+    con.commit()
+
+
+def test_delete_issue_removes_row_comments_and_vector(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+    _insert(con, "r/a", 1)
+    db.upsert_comment(
+        con,
+        {
+            "repo": "r/a",
+            "issue_number": 1,
+            "comment_id": 99,
+            "author": "x",
+            "body": "hi",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        },
+    )
+    db.upsert_vector(con, "r/a", 1, "h", embed.FakeEmbedder().embed(["T\nB"])[0])
+    con.commit()
+
+    db.delete_issue(con, "r/a", 1)
+
+    assert db.get_issue(con, "r/a", 1) is None
+    assert db.get_embed_hash(con, "r/a", 1) is None
+    assert (
+        con.execute(
+            "SELECT COUNT(*) FROM comments WHERE repo='r/a' AND issue_number=1"
+        ).fetchone()[0]
+        == 0
+    )
+    assert con.execute("SELECT COUNT(*) FROM vec_issues").fetchone()[0] == 0
+
+
+def test_reconcile_repo_deletes_only_unseen_issues(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+    _insert(con, "r/a", 1)
+    _insert(con, "r/a", 2)
+    _insert(con, "r/b", 3)
+
+    gone = sync.reconcile_repo(con, "r/a", {2})
+
+    assert gone == [1]
+    assert db.get_issue(con, "r/a", 1) is None
+    assert db.get_issue(con, "r/a", 2) is not None
+    assert db.get_issue(con, "r/b", 3) is not None
+
+
+def _graphql_returning(numbers):
+    def graphql(query, variables):
+        return {
+            "repository": {
+                "issues": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": [
+                        {
+                            "number": n,
+                            "title": "T",
+                            "body": "B",
+                            "state": "OPEN",
+                            "stateReason": None,
+                            "author": {"login": "a"},
+                            "labels": {"nodes": []},
+                            "assignees": {"nodes": []},
+                            "milestone": None,
+                            "comments": {"totalCount": 0},
+                            "reactions": {"totalCount": 0},
+                            "createdAt": "2026-01-01T00:00:00Z",
+                            "updatedAt": "2026-06-01T00:00:00Z",
+                            "closedAt": None,
+                        }
+                        for n in numbers
+                    ],
+                }
+            }
+        }
+
+    return graphql
+
+
+def test_full_sync_retires_a_transferred_issue(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+    _insert(con, "r/a", 1)
+    _insert(con, "r/a", 2)
+
+    sync.sync_issues(con, "r/a", graphql=_graphql_returning([2]), full=True)
+
+    assert db.get_issue(con, "r/a", 1) is None
+    assert db.get_issue(con, "r/a", 2) is not None
+
+
+def test_incremental_sync_never_retires_anything(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+    _insert(con, "r/a", 1)
+    _insert(con, "r/a", 2)
+
+    sync.sync_issues(con, "r/a", graphql=_graphql_returning([2]), full=False)
+
+    assert db.get_issue(con, "r/a", 1) is not None
+
+
+def test_retired_ghost_stops_pairing_with_its_transferred_copy(tmp_path):
+    """The bug this task exists to prevent: A#1 transferred to r/b#9."""
+    import types
+
+    con = db.connect(tmp_path / "m.sqlite")
+    _insert(con, "r/a", 1, title="crash on init", body="stack trace")
+    _insert(con, "r/b", 9, title="crash on init", body="stack trace")
+    embedder = embed.FakeEmbedder()
+    embed.embed_repo(con, "r/a", embedder)
+    embed.embed_repo(con, "r/b", embedder)
+    cfg = types.SimpleNamespace(cosine_threshold=0.8, candidate_top_k=10)
+
+    before = candidates.candidate_pairs(con, cfg)
+    assert any(
+        {(a[0], a[1]), (b[0], b[1])} == {("r/a", 1), ("r/b", 9)} for a, b in before
+    )
+
+    sync.sync_issues(con, "r/a", graphql=_graphql_returning([]), full=True)
+
+    after = candidates.candidate_pairs(con, cfg)
+    assert not any(("r/a", 1) in ((a[0], a[1]), (b[0], b[1])) for a, b in after)
+
+
+def test_reembedding_does_not_resurrect_a_retired_issue(tmp_path):
+    con = db.connect(tmp_path / "m.sqlite")
+    _insert(con, "r/a", 1)
+    embed.embed_repo(con, "r/a", embed.FakeEmbedder())
+    sync.sync_issues(con, "r/a", graphql=_graphql_returning([]), full=True)
+
+    embed.embed_repo(con, "r/a", embed.FakeEmbedder())
+
+    assert db.get_embed_hash(con, "r/a", 1) is None
+```
+
+Add to `tests/triage_verse/test_review_queue.py`:
+
+```python
+def test_proposal_for_a_retired_issue_leaves_the_queue(tmp_path):
+    """A missing mirror row means the issue was transferred or deleted."""
+    con = db.connect(tmp_path / "m.sqlite")
+    props = tmp_path / "proposals"
+    props.mkdir()
+    (props / "a.jsonl").write_text(
+        json.dumps(
+            {
+                "id": "p1",
+                "repo": "r/a",
+                "issue": 1,
+                "action": "add-label",
+                "params": {"label": "regression"},
+                "confidence": 0.9,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    decisions_dir = tmp_path / "decisions"
+    decisions_dir.mkdir()
+
+    # No issues row at all: the mirror has no such issue.
+    assert review_queue.load_undecided(props, decisions_dir, con) == []
+```
+
+Confirm `db` is imported at the top of `test_review_queue.py`; add it if missing.
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `uv run pytest tests/triage_verse/test_sync_reconcile.py tests/triage_verse/test_review_queue.py::test_proposal_for_a_retired_issue_leaves_the_queue -v`
+Expected: FAIL — `AttributeError: module 'triage_verse.db' has no attribute 'delete_issue'`, and the queue test returns one proposal instead of none.
+
+- [ ] **Step 3: Write minimal implementation**
+
+Append to `src/triage_verse/db.py`:
+
+```python
+def delete_issue(con: sqlite3.Connection, repo: str, number: int) -> None:
+    """Remove an issue and its derived rows from the mirror.
+
+    For issues GitHub no longer has in `repo` -- transferred away, or deleted.
+    The embedding rows must go too, and the `issues` row must go rather than
+    merely being marked closed: `embed_repo` has no state filter, so a surviving
+    row would be re-embedded, and `knn` ignores state, so a surviving vector
+    would keep surfacing as a duplicate candidate.
+
+    Classification and dedup history keyed to (repo, number) is deliberately
+    left in place, as are the append-only JSONL logs, so the audit trail
+    survives the row.
+    """
+    row = con.execute(
+        "SELECT id FROM issue_vectors WHERE repo=? AND number=?", (repo, number)
+    ).fetchone()
+    if row is not None:
+        con.execute("DELETE FROM vec_issues WHERE rowid=?", (row["id"],))
+        con.execute(
+            "DELETE FROM issue_vectors WHERE repo=? AND number=?", (repo, number)
+        )
+    con.execute(
+        "DELETE FROM comments WHERE repo=? AND issue_number=?", (repo, number)
+    )
+    con.execute(
+        "DELETE FROM issues WHERE repo=? AND number=? AND is_pr=0", (repo, number)
+    )
+```
+
+In `src/triage_verse/sync.py`, add above `sync_issues`:
+
+```python
+def reconcile_repo(con: sqlite3.Connection, repo: str, seen: set[int]) -> list[int]:
+    """Delete mirrored issues of `repo` that GitHub no longer lists.
+
+    Only sound after an exhaustive walk (`full=True`): an incremental sync stops
+    at the stored cursor and legitimately never sees older issues, so absence
+    there means nothing. A transferred issue leaves its source repo altogether,
+    so absence from a full walk is the only signal available.
+    """
+    rows = con.execute(
+        "SELECT number FROM issues WHERE repo=? AND is_pr=0", (repo,)
+    ).fetchall()
+    gone = sorted(r["number"] for r in rows if r["number"] not in seen)
+    for number in gone:
+        db.delete_issue(con, repo, number)
+    con.commit()
+    return gone
+```
+
+Replace `sync_issues` with a version that collects seen numbers and reconciles:
+
+```python
+def sync_issues(
+    con: sqlite3.Connection,
+    repo: str,
+    *,
+    graphql: Callable = gh_graphql,
+    full: bool = False,
+    log: Callable[[str], None] = print,
+) -> int:
+    seen: set[int] = set()
+
+    def upsert(con_: sqlite3.Connection, node: dict) -> int:
+        db.upsert_issue(con_, parse_issue_node(repo, node))
+        seen.add(node["number"])
+        return 1
+
+    count = _walk_updated_desc(
+        con, repo, "issues", ISSUES_QUERY, "issues", upsert, graphql, full
+    )
+    # A full walk is exhaustive (no cursor, so it exits only when the connection
+    # is drained), and an exception would have propagated before reaching here.
+    if full:
+        gone = reconcile_repo(con, repo, seen)
+        if gone:
+            log(
+                f"  reconcile {repo}: retired {len(gone)} issue(s) GitHub no longer "
+                f"lists (transferred or deleted): {gone}"
+            )
+    return count
+```
+
+In `sync_all`, pass the logger through:
+
+```python
+            totals["issues"] += sync_issues(con, repo, full=full, log=log)
+```
+
+In `src/triage_verse/review_queue.py`, replace `_is_closed` with:
+
+```python
+def _not_reviewable(con: sqlite3.Connection, repo: str, number: int) -> bool:
+    """True when the mirror says this issue cannot be reviewed.
+
+    Either it is closed, or it is absent — which means sync reconciliation
+    retired it because GitHub no longer lists it in this repo (transferred away
+    or deleted), so any proposal about it is moot.
+    """
+    issue = db.get_issue(con, repo, number)
+    return issue is None or issue["state"] != "OPEN"
+```
+
+and update its call site inside `load_undecided`:
+
+```python
+        if (
+            pid in terminal_ids
+            or r.get("action") not in SUPPORTED_ACTIONS
+            or _not_reviewable(con, r["repo"], r["issue"])
+        ):
+            continue
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `uv run pytest tests/triage_verse/test_sync_reconcile.py tests/triage_verse/test_review_queue.py tests/triage_verse/test_sync_issues.py tests/triage_verse/test_candidates.py -v`
+Expected: PASS. `test_sync_issues.py` and `test_candidates.py` are included because they exercise the changed `sync_issues` signature and the candidate pipeline; if a pre-existing test asserted `_is_closed` by name, update it to `_not_reviewable`.
+
+- [ ] **Step 5: Run the full gate**
+
+Run: `make py-check`
+Expected: all clean.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/triage_verse/db.py src/triage_verse/sync.py src/triage_verse/review_queue.py tests/triage_verse/test_sync_reconcile.py tests/triage_verse/test_review_queue.py
+git commit -m "fix(sync): retire mirrored issues GitHub no longer lists
+
+A transferred issue leaves its source repo, but upsert-only sync froze the row
+at OPEN forever. The ghost then paired with its own transferred copy as a
+near-identical cross-repo duplicate, so dedup would propose closing the live
+issue as a duplicate of one that no longer exists. Full syncs now diff the
+mirrored set against GitHub and delete what vanished."
+```
+
+---
+
 ## Self-review notes
 
 **Spec coverage.** Prompt definitions → Task 1. Action mapping and the degrade-to-`close-duplicate` fallback → Task 2. `link-duplicate.md` template → Task 3. Both executor branches, and the "no transfer mutation" property → Task 4. Stakes (`link-duplicate`/`suggest-transfer` deliberately not high-stakes), `transferred` as terminal, and the destination helper → Task 5. Autonomy exclusion and the egress-guard regression → Task 6. Completion records → Task 7. Readable params, badge, drawer block → Task 8. Transfers panel and `Mark transferred` → Task 9.
@@ -1241,3 +1593,9 @@ git commit -m "feat(review-app): Transfers worklist for approved transfer sugges
 **Deliberately not done:** no schema migration (the column exists), no `gh.py` change (so `transferIssue` keeps failing closed), no comment on `suggest-transfer` (a public "belongs elsewhere" note would go stale the moment someone moved the issue), and no reciprocal comment on the canonical issue for `link-duplicate` (a proposal targets one issue, and dedup emits no reciprocal proposal).
 
 **Known gap, carried from the spec:** coverage is limited to issues the dedup stage paired *across repositories*. A plainly misfiled issue that duplicates nothing gets no suggestion, because `cross_repo_option` only exists on a pair verdict. Catching those needs a per-issue classification signal — a separate design.
+
+**Task 10 is a prerequisite for shipping, not a nice-to-have.** Tasks 1-9 make `transfer` actionable, and an actioned transfer creates the ghost row that makes dedup recommend undoing it. Do not ship Tasks 1-9 without Task 10. It is ordered last only because it is independent of them; running it first is equally valid.
+
+**Reconciliation runs on full syncs only.** An incremental sync stops at the stored cursor, so absence from its window is normal and carries no information. Ghosts therefore persist until the next `sync --full`. That is a deliberate limit, not an oversight: inferring deletion from an incremental window would retire live issues.
+
+**Residual gap after Task 10:** the transferred issue is still re-analyzed from scratch in its new repo, since nothing links B#N back to A#1. That is defensible — labels and priority appropriate in repo B may genuinely differ — but it does mean repeated analysis spend. Separately, if repo B is not active in `config/repos.yaml`, the transferred issue is never mirrored and leaves the system silently.
