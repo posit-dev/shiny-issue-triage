@@ -75,7 +75,7 @@ document.addEventListener("keydown", (e) => {
 
 
 def _row_label(proposal: dict) -> str:
-    return f"{proposal['repo']}#{proposal['issue']} — {proposal['action']}: {proposal['params']}"
+    return f"{proposal['repo']}#{proposal['issue']} — {proposal['action']}: {_params_line(proposal)}"
 
 
 def _row_snippet(proposal: dict) -> str:
@@ -98,6 +98,19 @@ def row_ui(proposal: dict, snippet: str):
                     "background-color: #c62828; color: white; border-radius: 999px; "
                     "padding: 0 0.5rem; margin-right: 0.5rem; font-size: 0.8rem;"
                 ),
+            ),
+        )
+    if proposal["action"] == "suggest-transfer":
+        dest = review_queue.transfer_destination(proposal)
+        header.insert(
+            0,
+            ui.span(
+                f"→ {dest}" if dest else "transfer",
+                style=(
+                    "background-color: #00695c; color: white; border-radius: 999px; "
+                    "padding: 0 0.5rem; margin-right: 0.5rem; font-size: 0.8rem;"
+                ),
+                title="Suggested transfer; a maintainer must move this on GitHub.",
             ),
         )
     if proposal.get("stale"):
@@ -360,6 +373,18 @@ def _close_duplicate_params(params: dict) -> str:
     return " · ".join(bits)
 
 
+def _params_line(proposal: dict) -> str:
+    """Proposal params as words, per action."""
+    action = proposal["action"]
+    params = proposal.get("params") or {}
+    if action in ("close-duplicate", "link-duplicate"):
+        return _close_duplicate_params(params)
+    if action == "suggest-transfer":
+        dest = review_queue.transfer_destination(proposal)
+        return f"→ {dest}" if dest else "→ (destination not identified)"
+    return str(params)
+
+
 def _drawer_sibling(proposal: dict) -> list:
     parts = [ui.h4("Duplicate sibling")]
     sibling = review_queue.duplicate_sibling(proposal)
@@ -385,11 +410,26 @@ def _drawer_sibling(proposal: dict) -> list:
     return parts
 
 
+def _drawer_transfer(proposal: dict) -> list:
+    dest = review_queue.transfer_destination(proposal)
+    parts: list = [ui.h4("Suggested destination")]
+    if dest is None:
+        parts.append(ui.p("(destination not identified from the canonical ref)"))
+        return parts
+    parts.append(ui.p(ui.a(dest, href=f"https://github.com/{dest}", target="_blank")))
+    parts.append(
+        ui.p(
+            "Approving applies the 'wrong location' label only — it does not move "
+            "the issue. Transfer it by hand on GitHub (Transfer issue, in the "
+            "issue sidebar). It stays on the Transfers tab until you mark it done.",
+            class_="text-muted",
+        )
+    )
+    return parts
+
+
 def _drawer_proposal(proposal: dict) -> list:
-    if proposal["action"] == "close-duplicate":
-        params_line = _close_duplicate_params(proposal["params"])
-    else:
-        params_line = str(proposal["params"])
+    params_line = _params_line(proposal)
     parts = [
         ui.h4("Proposal"),
         ui.p(f"{proposal['action']}: {params_line}"),
@@ -477,6 +517,8 @@ def _drawer_panel(state: dict, item: dict | None):
             *_drawer_comments(item),
         ]
     parts += _drawer_proposal(state["proposal"])
+    if state["proposal"]["action"] == "suggest-transfer":
+        parts += _drawer_transfer(state["proposal"])
     parts.append(ui.p(ui.a("Open on GitHub ↗", href=github_url, target="_blank")))
     return ui.tags.div(*parts, id="drawer-panel")
 
