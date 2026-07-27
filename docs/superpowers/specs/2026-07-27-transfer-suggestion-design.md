@@ -1,182 +1,194 @@
-# Transfer suggestion, and retiring `cross_repo_option`
+# Implementing `cross_repo_option`: link, and suggest-transfer
 
 **Date:** 2026-07-27
 **Status:** Approved
 
 ## Summary
 
-Two related changes to how the pipeline handles issues that belong in a
-different repository:
-
-1. **Retire `cross_repo_option`** from the dedup schema, proposal params, and
-   review-app rendering. The field is model output that the model was never told
-   how to produce, and no code has ever branched on it.
-2. **Add a transfer *suggestion*** — a new `suggest-transfer` proposal that
-   names the repository an issue should live in. The system never performs the
-   transfer. A human does it on GitHub, and the review app gives them a worklist
-   for doing so.
-
-The pipeline gains **no new ability to mutate GitHub**. The egress guard's
-allowlists are unchanged, so an actual `transferIssue` mutation still fails
-closed.
-
-## Part 1 — Why `cross_repo_option` is being retired
-
-The dedup stage's output schema asks the model for
+The dedup stage already asks the model, for every duplicate pair that spans two
+repositories, what should happen to it:
 `cross_repo_option: "close-and-link" | "transfer" | "keep-both-link" | null`.
-It is stored in `dedup_verdicts.cross_repo_option`, threaded into
-`close-duplicate` proposal params, and displayed to the reviewer. No code
-branches on the value.
+The value is stored, threaded into proposal params, and shown to reviewers — but
+no code has ever branched on it. Every cross-repo duplicate gets the same
+treatment.
 
-It is being removed rather than implemented, for four reasons:
+This change makes the field mean something:
 
-**The model is never told what the values mean.** The only text sent with the
-dedup request is "Decide whether A and B are duplicate, related, or distinct."
-The three option names appear nowhere in any prompt, rubric, or taxonomy — the
-sole other occurrence of the word "transfer" in the repository is the safety
-rubric line forbidding auto-transfer. The model is choosing from an undefined
-enum, so the stored values carry no reliable signal. Branching on them would
-mean acting on noise.
+- **`close-and-link`** keeps today's behavior — comment, then close as
+  `not planned`.
+- **`keep-both-link`** posts a comment linking the pair and closes nothing.
+- **`transfer`** flags the issue for a human to move, and routes it to a
+  worklist in the review app.
 
-**`keep-both-link` contradicts its own action.** The value only ever rides on a
-`close-duplicate` proposal. "Keep both" means *do not close* — the option and
-the action it decorates are incoherent.
+The system **never performs a transfer**. The egress guard's allowlists are not
+modified, so a `transferIssue` mutation still fails closed. The only new
+GitHub-facing capability is a comment that doesn't close, which the pipeline can
+already express.
 
-**The current cross-repo behavior is a deliberate decision, not an oversight.**
-The Plan 4 executor design states that cross-repo pairs fall back to a
-`not planned` close plus the cross-repo comment template, because GitHub's
-duplicate-close linkage is same-repo only. The executor implements exactly that.
-There is no missing branch, only an unused field.
+## The problem being fixed
 
-**"Wrong repository" is the wrong shape for dedup.** Belonging in another
-repository is a property of a single issue, not of a duplicate pair. A pair
-verdict is the wrong place to express it, which is part of why the option was
-never actionable.
+Three things are wrong with the field as it stands, and all three are addressed
+here.
 
-The `dedup_verdicts.cross_repo_option` **column stays**. This codebase retains
-decision history deliberately, dropping a SQLite column requires a full table
-rebuild in the migration path, and a column holding historical values costs
-nothing. New rows will write `NULL`.
+**The model is never told what the values mean.** The only instruction sent with
+a dedup request is "Decide whether A and B are duplicate, related, or distinct."
+The three option names appear in no prompt, rubric, or taxonomy — the sole other
+occurrence of the word "transfer" anywhere in the repository is the safety rubric
+line forbidding auto-transfer. A model choosing from an undefined enum produces
+noise, so **defining the options in the prompt is a prerequisite**, not a polish
+step. Branching on today's values without doing that would mean acting on
+guesses.
 
-## Part 2 — Transfer suggestion
+**One action name describes three outcomes.** The value rides on a
+`close-duplicate` proposal. `keep-both-link` means *do not close*, which
+contradicts the action it decorates, and `transfer` means *do not close either*.
+A reviewer approving something labelled `close-duplicate` should be able to
+trust that it closes.
 
-### Where it lives
+**Nothing surfaces the human follow-up.** A `transfer` outcome requires a person
+to act on GitHub. Nothing in the review app tells them to, or tracks whether they
+did.
 
-The classification stage, not dedup. The label allowlist already contains
-`wrong location`, so the classifier can already flag a misfiled issue — it just
-cannot say where the issue belongs. This change completes that existing signal
-with a destination.
+## Design
 
-### Schema and prompt
+### Defining the options to the model
 
-`CLASSIFY_SCHEMA` gains `suggested_repo`, a nullable string, added to the
-`required` list to match the schema's existing style of requiring every field.
+The dedup request gains explicit definitions of the three options and states that
+the field applies only to pairs spanning two repositories, with `null` for
+same-repo pairs. The definitions describe the *situation* each option fits:
 
-Unlike `cross_repo_option`, this field is **defined to the model**. The prompt
-states what `suggested_repo` means and supplies the active repository list from
-`config/repos.yaml`, so the model selects from a closed set rather than
-inventing a name. Null means "this issue is in the right place", which is the
-expected answer for the overwhelming majority of issues.
+- `close-and-link` — the duplicate adds nothing the canonical issue lacks; the
+  discussion should consolidate there.
+- `keep-both-link` — both issues have standing in their own repositories (for
+  example, the same defect needs tracking separately in an R and a Python
+  package), and neither should be closed.
+- `transfer` — the issue is in the wrong repository, and its content belongs in
+  the canonical issue's repository rather than being discarded.
 
-### Validation
+### Mapping the option to distinct actions
 
-Storage validates the value the way label output is already validated, reducing
-it to `NULL` unless it both appears in the active-repos allowlist and differs
-from the issue's own repository. A hallucinated or self-referential destination
-therefore becomes "no suggestion" rather than a bad proposal.
+`proposals.build` maps the option to a **different action per outcome**, so an
+action name always tells the truth about what approving it does:
 
-This needs a `classifications.suggested_repo` column and a schema-version bump.
+| `cross_repo_option` | action emitted | executor plans |
+|---|---|---|
+| `close-and-link`, or `null` | `close-duplicate` | comment from the cross-repo template, then close as `not planned` — unchanged from today |
+| `keep-both-link` | `link-duplicate` | comment linking the canonical issue; **no close** |
+| `transfer` | `suggest-transfer` | add the `wrong location` label; **no close, no transfer** |
 
-### Proposal and execution
+Same-repo pairs are untouched: they continue to emit `close-duplicate` and close
+with GitHub's native duplicate linkage. The option is ignored for them.
 
-A `suggest-transfer` proposal is emitted only when a validated non-null
-`suggested_repo` survives, with params `{"suggested_repo": "owner/name"}`.
+Because the option is model output, it is validated at proposal-build time. A
+value of `transfer` or `keep-both-link` on a same-repo pair, or any unrecognized
+string, degrades to `close-and-link`.
 
-The executor plans exactly one mutation for it: **add the `wrong location`
-label**. Nothing else. Specifically:
+That fallback closes an issue, which is not the least destructive of the three
+outcomes — `keep-both-link` is. It is chosen anyway because it preserves exactly
+today's behavior for exactly today's inputs, so this change cannot alter what
+happens to a pair whose option is absent or malformed. The risk is bounded by
+review: `close-duplicate` is high-stakes, so a human must work through the
+evidence before anything closes.
 
-- **No `transferIssue` mutation.** The egress guard's operation and wire-field
-  allowlists are not modified. A transfer attempt still fails closed, which is
-  the property that makes this design safe to ship.
-- **No public comment.** The destination is information for the maintainer, and
-  it lives in the review app where they will act on it. A public "we think this
-  belongs elsewhere" comment would go stale the instant someone transferred the
-  issue, with nothing to retract it. Approving a suggestion produces no
-  public-facing write beyond a label.
-- **Undo keeps working.** A label add is already in undo's vocabulary, so the
-  undo guarantee needs no carve-out.
+### Stakes and autonomy
 
-Adding a label the issue already carries is a no-op on GitHub, so the proposal
-is safe to apply alongside the classifier's normal label output.
+Only `close-duplicate` remains in `HIGH_STAKES_ACTIONS`, since it is the only one
+that closes an issue. `link-duplicate` (a comment) and `suggest-transfer` (a
+label) are ordinary proposals, reviewable with quick-approve and bulk-approve.
 
-### Autonomy
+Neither new action is added to `autonomy.ELIGIBLE`, so neither can graduate to
+auto-approval, with a test asserting their absence. For `suggest-transfer` this
+is belt-and-braces rather than the real safeguard: even auto-approved, it could
+only apply a label, because the executor has no transfer capability at all.
 
-`suggest-transfer` is deliberately **not** added to `autonomy.ELIGIBLE`, so it
-can never graduate to auto-approval. A test asserts its absence, so a later edit
-cannot quietly promote it.
+### Destination for a transfer
 
-Note that this is belt-and-braces rather than the primary safeguard: even a
-fully auto-approved `suggest-transfer` could only add a label, because the
-executor has no transfer capability at all.
+No new field is required. For a cross-repo pair the destination *is* the
+canonical issue's repository, which is already present in the proposal's
+`canonical` param.
 
-## Part 3 — User interface
+### Templates
 
-Because the system never performs the transfer, the UI *is* the feature. A
-captured suggestion that no human can act on is the same dead end as the field
-being retired.
+`close-duplicate-cross-repo.md` is unchanged. A new `link-duplicate.md` notes
+that the two issues track the same underlying problem in different repositories,
+links the sibling, and states that both are staying open deliberately so neither
+reporter thinks their report was dismissed.
 
-### Reading the suggestion
+Like every other action, `link-duplicate` comments only on the proposal's own
+issue, not on the sibling. A proposal targets one issue, and the pipeline holds
+no mandate to write to the canonical issue's repository on the strength of a
+verdict about this one. If the pair warrants a note on both sides, that is two
+proposals, and the dedup stage does not currently emit the reciprocal one.
 
-`_row_label` currently renders params via `str()`, which for this action would
-show a raw Python dict. It gains a `suggest-transfer` case rendering the
-destination in words (`→ posit-dev/py-shiny`), mirroring the special-casing that
-already exists for `close-duplicate` params.
+`suggest-transfer` posts no comment at all — see below.
 
-Queue rows for the action carry a distinct badge showing the destination, reusing
+### Why `suggest-transfer` posts no comment
+
+The destination is information for the maintainer, and it lives in the review app
+where they act on it. A public "we think this belongs elsewhere" comment would go
+stale the moment someone performed the transfer, with nothing to retract it.
+Approving a transfer suggestion therefore produces no public-facing write beyond
+a label.
+
+## User interface
+
+Because the system never performs the transfer, the UI is what makes the
+`transfer` outcome real. A captured suggestion nobody can act on is the same dead
+end as the field being unread.
+
+### Reading proposals
+
+`_row_label` renders params through `str()`, which would show a raw Python dict.
+The two new actions get readable renderings — a linked sibling reference, and a
+`→ owner/name` destination — mirroring the special-casing that already exists for
+`close-duplicate` params.
+
+Queue rows for `suggest-transfer` carry a badge showing the destination, reusing
 the pill styling already used for the `stale` and `not now` markers, so
-suggestions are scannable in a long queue.
+suggestions stay scannable in a long queue.
 
-The drawer gains a **Suggested destination** block: the target repository, a link
-to it, and explicit wording that the transfer must be performed manually on
-GitHub and that approving applies only the `wrong location` label. The drawer's
-existing "Open on GitHub ↗" link is the path to actually doing it. GitHub exposes
-no deep link for the transfer dialog itself — it lives in the issue sidebar — so
-the issue link is the closest available target.
+The drawer gains a **Suggested destination** block for `suggest-transfer`: the
+target repository, a link to it, and explicit wording that the transfer must be
+done manually and that approving applies only the `wrong location` label. The
+drawer's existing "Open on GitHub ↗" link is the route to doing it. GitHub exposes
+no deep link for the transfer dialog — it lives in the issue sidebar — so the
+issue link is the closest available target.
 
-### The workflow gap, and the Transfers panel
+### The Transfers panel
 
-Approving a `suggest-transfer` applies a label; it does **not** move the issue.
-Under the existing queue model an approved proposal leaves the queue, so without
-further work every approved suggestion would disappear with nobody having
-transferred anything. The suggestion would be recorded and then lost — the exact
-failure mode this change exists to fix.
+Approving a `suggest-transfer` applies a label; it does not move the issue. Under
+the existing queue model an approved proposal leaves the queue, so without
+further work every approved suggestion would vanish with nobody having
+transferred anything — recording the judgment and then losing it, which is the
+failure this change exists to fix.
 
-So the review app gains a **Transfers** nav panel: a worklist of approved
-`suggest-transfer` proposals, following the established pattern of the existing
-Skipped panel. Each entry shows the source issue, the suggested destination, and
-a link to the issue on GitHub. A **Mark transferred** control records completion
-so the entry leaves the list.
+The review app therefore gains a **Transfers** nav panel, following the
+established pattern of the Skipped panel: a worklist of approved
+`suggest-transfer` proposals, each showing the source issue, the destination
+repository, and a link to the issue on GitHub, with a **Mark transferred**
+control that records completion so the entry leaves the list.
 
 Completion is recorded explicitly rather than inferred. Detecting a transfer from
-the mirror is unreliable: a transferred issue's original number redirects rather
-than vanishing, and the issue reappears in the destination repository under a new
-number, so there is no clean signal that a given suggestion was the cause.
-Explicit marking is honest about what is known. Inferring completion from sync is
-a reasonable later refinement, not a prerequisite.
+the mirror is unreliable — a transferred issue's original number redirects rather
+than disappearing, and it reappears in the destination repository under a new
+number, so no clean signal attributes the move to a given suggestion. Explicit
+marking is honest about what is actually known. Inferring completion during sync
+is a reasonable later refinement, not a prerequisite.
 
 ## Testing
 
-- `DEDUP_SCHEMA` no longer exposes `cross_repo_option`, and `close-duplicate`
-  proposal params no longer carry it.
-- Cross-repo duplicate execution is unchanged — still the comment plus
-  `not planned` close.
-- Classification storage nulls a `suggested_repo` that is unknown or equal to the
-  issue's own repository, and preserves a valid one.
-- `proposals.build` emits `suggest-transfer` only when a validated destination is
-  present.
-- The executor plans a lone `add-label` for `suggest-transfer` and never emits a
-  transfer mutation.
-- `suggest-transfer` is absent from `autonomy.ELIGIBLE`.
+- The dedup prompt states all three option definitions.
+- `proposals.build` maps each option to its action, and degrades an unrecognized
+  value, a same-repo `transfer`, and a same-repo `keep-both-link` to
+  `close-duplicate`.
+- Same-repo duplicate execution is unchanged: comment plus native duplicate
+  close.
+- `close-and-link` execution is unchanged: comment plus `not planned` close.
+- `link-duplicate` plans a comment and **no** close mutation.
+- `suggest-transfer` plans a lone `add-label` and never a transfer mutation.
+- `close-duplicate` is high-stakes; `link-duplicate` and `suggest-transfer` are
+  not.
+- Neither new action appears in `autonomy.ELIGIBLE`.
 - Regression: `gh_mutation("transferIssue", …)` is refused by the egress guard.
 - The Transfers panel lists approved suggestions and drops an entry once marked
   transferred.
@@ -185,13 +197,18 @@ a reasonable later refinement, not a prerequisite.
 
 - **Performing transfers.** Rejected. A transfer assigns a new issue number in
   the destination repository, and transferring back yields a third number rather
-  than restoring the original — so it is content-reversible but not
+  than restoring the original — content-reversible, but not
   identity-reversible. It would also change both halves of the mirror's
   `(repo, number)` primary key, orphaning every proposal, decision, dedup verdict,
-  and result row that references the issue, including the proposal that
-  authorized the move. Enabling it would additionally require new egress-guard
-  allowlist entries and a new undo verb.
+  and result row referencing the issue, including the proposal that authorized
+  the move. It would further require new egress-guard allowlist entries and a new
+  undo verb.
+- **Suggesting a transfer for an issue that duplicates nothing.** Coverage here
+  is limited to issues the dedup stage paired across repositories, because
+  `cross_repo_option` only exists on a pair verdict. A plainly misfiled issue
+  that duplicates nothing gets no suggestion. Catching those needs a per-issue
+  signal from the classification stage — a reasonable follow-up, and a separate
+  design.
 - **Amending the safety rubric.** Its prohibition on auto-transfer remains
-  accurate and this design complies with it.
-- **Dropping the `cross_repo_option` column.**
-- **Suggesting transfers for pull requests.** Issues only.
+  accurate, and this design complies with it.
+- **Transfers or duplicate handling for pull requests.** Issues only.
