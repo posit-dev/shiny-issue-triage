@@ -322,7 +322,10 @@ def app_audit_reject(item: dict, *, decisions_dir=DECISIONS_DIR) -> str:
 
 def app_mark_transferred(decision: dict, *, decisions_dir=DECISIONS_DIR) -> str:
     """Record that a human moved the issue this suggest-transfer pointed at."""
-    decisions.write([decisions.record_transferred(decision)], decisions_dir)
+    decisions.write(
+        [decisions.record_transferred(decision, decided_by=decisions.current_actor())],
+        decisions_dir,
+    )
     return decision["proposal_id"]
 
 
