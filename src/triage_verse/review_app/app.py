@@ -6,7 +6,6 @@ Run with: shiny run src/triage_verse/review_app/app.py
 
 from __future__ import annotations
 
-import getpass
 import json
 import os
 import pathlib
@@ -266,7 +265,7 @@ def app_audit_reject(item: dict, *, decisions_dir=DECISIONS_DIR) -> str:
         "action": item["action"],
         "params": item["params"],
         "verdict": "rejected",
-        "decided_by": "human",
+        "decided_by": decisions.current_actor(),
         "decided_at": __import__("datetime")
         .datetime.now(__import__("datetime").timezone.utc)
         .strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -561,12 +560,21 @@ def server(input: Inputs, output: Outputs, session: Session):
                 selected.set(i)
                 return
 
-    def on_decide(proposal: dict, verdict: str, params: dict | None = None) -> None:
+    def on_decide(
+        proposal: dict,
+        verdict: str,
+        params: dict | None = None,
+        reason: str | None = None,
+    ) -> None:
         _select(proposal)
         decisions.write(
             [
                 decisions.record(
-                    proposal, verdict, params=params, decided_by=getpass.getuser()
+                    proposal,
+                    verdict,
+                    params=params,
+                    decided_by=decisions.current_actor(),
+                    reason=reason,
                 )
             ],
             DECISIONS_DIR,
@@ -795,7 +803,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     def _approve_visible():
         decisions.write(
             [
-                decisions.record(p, "approved", decided_by=getpass.getuser())
+                decisions.record(p, "approved", decided_by=decisions.current_actor())
                 for p in queue.get()
                 if p["action"] not in review_queue.HIGH_STAKES_ACTIONS
             ],

@@ -64,7 +64,11 @@ def test_app_audit_items_lists_executed_audit_flagged(tmp_path):
     assert items[0]["proposal_id"] == "p1"
 
 
-def test_app_audit_reject_records_rejected_decision(tmp_path):
+def test_app_audit_reject_records_rejected_decision(tmp_path, monkeypatch):
+    from triage_verse import decisions
+
+    monkeypatch.setattr(decisions, "current_actor", lambda: "barret")
+
     dec = tmp_path / "decisions"
     item = {
         "repo": "o/r",
@@ -90,3 +94,4 @@ def test_app_audit_reject_records_rejected_decision(tmp_path):
     assert rec["proposal_id"] == "p5"
     # Must NOT be decided_by=autonomy (so it counts as human precision failure)
     assert rec.get("decided_by") != "autonomy"
+    assert rec["decided_by"] == "barret"
