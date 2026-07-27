@@ -59,3 +59,10 @@ def test_render_config_lists_promoted_only():
             "add-label": {"promoted_at": "2026-08-01", "confidence_floor": 0.9}
         }
     }
+
+
+def test_new_actions_can_never_graduate_to_autonomy():
+    from triage_verse import autonomy
+
+    assert "suggest-transfer" not in autonomy.ELIGIBLE
+    assert "link-duplicate" not in autonomy.ELIGIBLE

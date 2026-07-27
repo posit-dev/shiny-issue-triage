@@ -275,3 +275,33 @@ def test_executor_query_constants_pass_real_guard(query, operation):
             operation=operation,
             repos=["evil/repo"],
         )
+
+
+def test_transfer_issue_operation_is_refused():
+    with pytest.raises(gh.EgressRefused):
+        gh.gh_mutation(
+            "transferIssue",
+            "mutation($id: ID!, $repo: ID!) { transferIssue(input: {issueId: $id,"
+            " repositoryId: $repo}) { issue { id } } }",
+            {"id": "NID", "repo": "RID"},
+            repos=["o/r"],
+        )
+    assert "transferIssue" not in gh.ALLOWED_OPERATIONS
+    assert "transferIssue" not in gh.ALLOWED_MUTATION_FIELDS
+
+
+def test_transfer_issue_wire_field_is_refused_even_under_an_allowed_operation():
+    with pytest.raises(gh.EgressRefused):
+        gh.classify_gh_call(
+            ["api", "graphql"],
+            input=json.dumps(
+                {
+                    "query": "mutation($id: ID!, $repo: ID!) { transferIssue("
+                    "input: {issueId: $id, repositoryId: $repo}) { issue { id } } }",
+                    "variables": {},
+                }
+            ),
+            operation="addComment",
+            repos=["o/r"],
+            resolve_allowed=lambda: frozenset({"o/r"}),
+        )
