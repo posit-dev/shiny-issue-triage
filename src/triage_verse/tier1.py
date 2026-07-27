@@ -24,7 +24,7 @@ def select_candidates(con, repos, *, proposals_dir, limit: int) -> list[dict]:
         WHERE i.state = 'OPEN' AND i.repo IN ({placeholders})
           AND (
             EXISTS (
-              SELECT 1 FROM classifications c
+              SELECT 1 FROM classifications_latest c
               WHERE c.repo = i.repo AND c.number = i.number
                 AND c.close_candidate_json IS NOT NULL
                 AND json_extract(c.close_candidate_json, '$.reason') = 'fixed'

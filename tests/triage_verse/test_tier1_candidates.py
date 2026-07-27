@@ -49,6 +49,25 @@ def test_excludes_issues_with_existing_tier1_proposal(tmp_path):
     assert cands == []
 
 
+def test_uses_latest_classification_for_fixed_signal(tmp_path):
+    con = db.connect(":memory:")
+    _open_issue(con, "o/r", 1)
+    # Older run flagged it fixed; newer run cleared the close candidate.
+    con.execute(
+        "INSERT INTO classifications (repo, number, clf_hash, type, priority,"
+        " assessment, close_candidate_json, confidence, model, run_id, at)"
+        " VALUES ('o/r',1,'h','bug','Low','a',?,0.8,'m','run1','2026-01-01T00:00:00Z')",
+        ('{"reason": "fixed", "rationale": "r", "confidence": 0.8}',),
+    )
+    con.execute(
+        "INSERT INTO classifications (repo, number, clf_hash, type, priority,"
+        " assessment, close_candidate_json, confidence, model, run_id, at)"
+        " VALUES ('o/r',1,'h','bug','Low','a',NULL,0.8,'m','run2','2026-01-02T00:00:00Z')"
+    )
+    cands = tier1.select_candidates(con, ["o/r"], proposals_dir=tmp_path, limit=25)
+    assert {c["issue"] for c in cands} == set()  # latest verdict is not fixed
+
+
 def test_limit_caps_and_orders_oldest_first(tmp_path):
     con = db.connect(":memory:")
     _open_issue(con, "o/r", 1, "2026-03-01T00:00:00Z")
