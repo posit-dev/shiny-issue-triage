@@ -85,9 +85,15 @@ def iter_jsonl_records(base_dir: str | pathlib.Path) -> list[dict]:
     return records
 
 
-def _is_closed(con: sqlite3.Connection, repo: str, number: int) -> bool:
+def _not_reviewable(con: sqlite3.Connection, repo: str, number: int) -> bool:
+    """True when the mirror says this issue cannot be reviewed.
+
+    Either it is closed, or it is absent -- which means sync reconciliation
+    retired it because GitHub no longer lists it in this repo (transferred away
+    or deleted), so any proposal about it is moot.
+    """
     issue = db.get_issue(con, repo, number)
-    return issue is not None and issue["state"] != "OPEN"
+    return issue is None or issue["state"] != "OPEN"
 
 
 # Recorded when a human confirms they moved an issue a suggest-transfer proposal
@@ -158,7 +164,7 @@ def load_undecided(
         if (
             pid in terminal_ids
             or r.get("action") not in SUPPORTED_ACTIONS
-            or _is_closed(con, r["repo"], r["issue"])
+            or _not_reviewable(con, r["repo"], r["issue"])
         ):
             continue
         rec = {**r, "stale": True} if pid in stale_at else dict(r)

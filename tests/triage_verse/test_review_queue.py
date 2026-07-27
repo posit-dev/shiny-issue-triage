@@ -61,7 +61,10 @@ def test_load_undecided_sorts_by_confidence_descending(tmp_path):
             },
         ],
     )
-    rows = review_queue.load_undecided(proposals_dir, decisions_dir, _mirror(tmp_path))
+    con = _mirror(tmp_path)
+    _seed_issue(con, "r/r", 1, "OPEN")
+    _seed_issue(con, "r/r", 2, "OPEN")
+    rows = review_queue.load_undecided(proposals_dir, decisions_dir, con)
     assert [r["id"] for r in rows] == ["a", "b"]
 
 
@@ -91,7 +94,10 @@ def test_load_undecided_excludes_terminal_verdicts(tmp_path):
         decisions_dir / "2026" / "W27.jsonl",
         [{"id": "d1", "proposal_id": "a", "verdict": "approved"}],
     )
-    rows = review_queue.load_undecided(proposals_dir, decisions_dir, _mirror(tmp_path))
+    con = _mirror(tmp_path)
+    _seed_issue(con, "r/r", 1, "OPEN")
+    _seed_issue(con, "r/r", 2, "OPEN")
+    rows = review_queue.load_undecided(proposals_dir, decisions_dir, con)
     assert [r["id"] for r in rows] == ["b"]
 
 
@@ -188,7 +194,9 @@ def test_load_undecided_skips_malformed_lines(tmp_path):
         "not json\n",
         encoding="utf-8",
     )
-    rows = review_queue.load_undecided(proposals_dir, decisions_dir, _mirror(tmp_path))
+    con = _mirror(tmp_path)
+    _seed_issue(con, "r/r", 1, "OPEN")
+    rows = review_queue.load_undecided(proposals_dir, decisions_dir, con)
     assert [r["id"] for r in rows] == ["a"]
 
 
@@ -228,7 +236,11 @@ def test_load_undecided_includes_close_actions(tmp_path):
             },
         ],
     )
-    rows = review_queue.load_undecided(proposals_dir, decisions_dir, _mirror(tmp_path))
+    con = _mirror(tmp_path)
+    _seed_issue(con, "r/r", 1, "OPEN")
+    _seed_issue(con, "r/r", 2, "OPEN")
+    _seed_issue(con, "r/r", 3, "OPEN")
+    rows = review_queue.load_undecided(proposals_dir, decisions_dir, con)
     assert [r["id"] for r in rows] == ["b", "c", "a"]
 
 
@@ -254,7 +266,10 @@ def test_load_undecided_excludes_out_of_scope_actions(tmp_path):
             },
         ],
     )
-    rows = review_queue.load_undecided(proposals_dir, decisions_dir, _mirror(tmp_path))
+    con = _mirror(tmp_path)
+    _seed_issue(con, "r/r", 1, "OPEN")
+    _seed_issue(con, "r/r", 2, "OPEN")
+    rows = review_queue.load_undecided(proposals_dir, decisions_dir, con)
     assert [r["id"] for r in rows] == ["a"]
 
 
@@ -313,7 +328,9 @@ def test_load_undecided_excludes_closed_issues(tmp_path):
     assert [r["id"] for r in rows] == ["a"]
 
 
-def test_load_undecided_keeps_proposals_missing_from_mirror(tmp_path):
+def test_load_undecided_excludes_proposals_missing_from_mirror(tmp_path):
+    """A row absent from the mirror means sync reconciliation retired it
+    (transferred away or deleted), so it must not linger in the queue."""
     proposals_dir = tmp_path / "proposals"
     decisions_dir = tmp_path / "decisions"
     _write_jsonl(
@@ -329,7 +346,7 @@ def test_load_undecided_keeps_proposals_missing_from_mirror(tmp_path):
         ],
     )
     rows = review_queue.load_undecided(proposals_dir, decisions_dir, _mirror(tmp_path))
-    assert [r["id"] for r in rows] == ["a"]
+    assert rows == []
 
 
 def test_issue_snippet_truncates_long_body():
@@ -547,7 +564,11 @@ def test_load_undecided_skips_invalid_module_ids(tmp_path):
             },
         ],
     )
-    rows = review_queue.load_undecided(proposals_dir, decisions_dir, _mirror(tmp_path))
+    con = _mirror(tmp_path)
+    _seed_issue(con, "r/r", 1, "OPEN")
+    _seed_issue(con, "r/r", 2, "OPEN")
+    _seed_issue(con, "r/r", 3, "OPEN")
+    rows = review_queue.load_undecided(proposals_dir, decisions_dir, con)
     assert [r["id"] for r in rows] == ["ok"]
 
 
@@ -637,3 +658,29 @@ def test_new_actions_are_supported_but_not_high_stakes():
     assert not (
         {"link-duplicate", "suggest-transfer"} & review_queue.HIGH_STAKES_ACTIONS
     )
+
+
+def test_proposal_for_a_retired_issue_leaves_the_queue(tmp_path):
+    """A missing mirror row means the issue was transferred or deleted."""
+    con = db.connect(tmp_path / "m.sqlite")
+    props = tmp_path / "proposals"
+    props.mkdir()
+    (props / "a.jsonl").write_text(
+        json.dumps(
+            {
+                "id": "p1",
+                "repo": "r/a",
+                "issue": 1,
+                "action": "add-label",
+                "params": {"label": "regression"},
+                "confidence": 0.9,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    decisions_dir = tmp_path / "decisions"
+    decisions_dir.mkdir()
+
+    # No issues row at all: the mirror has no such issue.
+    assert review_queue.load_undecided(props, decisions_dir, con) == []

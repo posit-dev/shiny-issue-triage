@@ -94,20 +94,52 @@ def _walk_updated_desc(
     return count
 
 
+def reconcile_repo(con: sqlite3.Connection, repo: str, seen: set[int]) -> list[int]:
+    """Delete mirrored issues of `repo` that GitHub no longer lists.
+
+    Only sound after an exhaustive walk (`full=True`): an incremental sync stops
+    at the stored cursor and legitimately never sees older issues, so absence
+    there means nothing. A transferred issue leaves its source repo altogether,
+    so absence from a full walk is the only signal available.
+    """
+    rows = con.execute(
+        "SELECT number FROM issues WHERE repo=? AND is_pr=0", (repo,)
+    ).fetchall()
+    gone = sorted(r["number"] for r in rows if r["number"] not in seen)
+    for number in gone:
+        db.delete_issue(con, repo, number)
+    con.commit()
+    return gone
+
+
 def sync_issues(
     con: sqlite3.Connection,
     repo: str,
     *,
     graphql: Callable = gh_graphql,
     full: bool = False,
+    log: Callable[[str], None] = print,
 ) -> int:
+    seen: set[int] = set()
+
     def upsert(con_: sqlite3.Connection, node: dict) -> int:
         db.upsert_issue(con_, parse_issue_node(repo, node))
+        seen.add(node["number"])
         return 1
 
-    return _walk_updated_desc(
+    count = _walk_updated_desc(
         con, repo, "issues", ISSUES_QUERY, "issues", upsert, graphql, full
     )
+    # A full walk is exhaustive (no cursor, so it exits only when the connection
+    # is drained), and an exception would have propagated before reaching here.
+    if full:
+        gone = reconcile_repo(con, repo, seen)
+        if gone:
+            log(
+                f"  reconcile {repo}: retired {len(gone)} issue(s) GitHub no longer "
+                f"lists (transferred or deleted): {gone}"
+            )
+    return count
 
 
 PRS_QUERY = """
@@ -249,7 +281,7 @@ def sync_all(
     try:
         for repo in repos:
             log(f"syncing {repo} ...")
-            totals["issues"] += sync_issues(con, repo, full=full)
+            totals["issues"] += sync_issues(con, repo, full=full, log=log)
             totals["prs"] += sync_prs(con, repo, full=full)
             totals["comments"] += sync_comments(con, repo, full=full)
             totals["repos"] += 1
