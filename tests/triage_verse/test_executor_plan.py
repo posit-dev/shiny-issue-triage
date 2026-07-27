@@ -200,6 +200,58 @@ def test_link_duplicate_bad_canonical_is_an_error(params):
     assert muts == [] and err is not None
 
 
+def _mirror_with(issues):
+    from triage_verse import db
+
+    con = db.connect(":memory:")
+    for repo, number in issues:
+        con.execute(
+            "INSERT INTO issues (repo, number, title, state, created_at, updated_at,"
+            " is_pr) VALUES (?,?,?,?,?,?,0)",
+            (repo, number, "t", "OPEN", "2026-01-01T00:00:00Z", "2026-07-01T00:00:00Z"),
+        )
+    con.commit()
+    return con
+
+
+def test_link_duplicate_refuses_a_canonical_missing_from_the_mirror():
+    """The comment is public and names the canonical; a retired canonical means
+    the pair is no longer real, so plan nothing rather than post it."""
+    con = _mirror_with([("o/r", 7)])  # canonical other/repo#3 absent
+
+    muts, err = executor.plan_decision(
+        _decision(
+            "link-duplicate",
+            {"canonical": "other/repo#3", "cross_repo_option": "keep-both-link"},
+        ),
+        _issue(),
+        allowed=ALLOWED,
+        tmpl=TMPL,
+        con=con,
+    )
+
+    assert muts == []
+    assert err is not None and "not in mirror" in err
+
+
+def test_link_duplicate_plans_a_comment_when_the_canonical_is_mirrored():
+    con = _mirror_with([("o/r", 7), ("other/repo", 3)])
+
+    muts, err = executor.plan_decision(
+        _decision(
+            "link-duplicate",
+            {"canonical": "other/repo#3", "cross_repo_option": "keep-both-link"},
+        ),
+        _issue(),
+        allowed=ALLOWED,
+        tmpl=TMPL,
+        con=con,
+    )
+
+    assert err is None
+    assert [m["kind"] for m in muts] == ["comment"]
+
+
 def test_suggest_transfer_only_labels():
     muts, err = executor.plan_decision(
         _decision(
