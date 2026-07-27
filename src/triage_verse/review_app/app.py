@@ -168,6 +168,7 @@ def row_server(
     on_decide: Callable[[dict, str], None],
     on_open: Callable[[dict], None],
     on_edit: Callable[[dict], None],
+    on_reject: Callable[[dict], None],
 ):
     @reactive.effect
     @reactive.event(input.open)
@@ -187,7 +188,7 @@ def row_server(
     @reactive.effect
     @reactive.event(input.reject)
     def _reject():
-        on_decide(proposal, "rejected")
+        on_reject(proposal)
 
     @reactive.effect
     @reactive.event(input.skip)
@@ -265,7 +266,7 @@ def app_audit_reject(item: dict, *, decisions_dir=DECISIONS_DIR) -> str:
         "action": item["action"],
         "params": item["params"],
         "verdict": "rejected",
-        "decided_by": "human",
+        "decided_by": decisions.current_actor(),
         "decided_at": __import__("datetime")
         .datetime.now(__import__("datetime").timezone.utc)
         .strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -536,7 +537,39 @@ def server(input: Inputs, output: Outputs, session: Session):
     drawer_state = reactive.value[dict | None](None)
     selected = reactive.value[int | None](None)
     edit_target = reactive.value[dict | None](None)
+    reject_target = reactive.value[dict | None](None)
     wired: set[str] = set()
+
+    def _module_modal_relay(
+        opener: Callable[[dict], None],
+    ) -> Callable[[dict], None]:
+        """Return a `request(proposal)` callable safe to invoke from a Shiny module.
+
+        The Queue rows are Shiny modules. Opening a modal directly from a
+        module's reactive context namespaces the modal's input ids (e.g.
+        "prop_x-edit_save"), so the top-level `@reactive.event` save handler
+        never fires and the action silently no-ops. This relays the trigger to a
+        top-level effect that calls `opener` in the root session, where the
+        modal's ids are un-namespaced. The plain (non-reactive) counter makes
+        each request distinct, so re-triggering on the same proposal still fires
+        the effect. Keyboard/drawer paths already run at top level and call the
+        opener directly, so they don't go through the relay.
+        """
+        seq = {"n": 0}
+        request = reactive.value[tuple[int, dict] | None](None)
+
+        @reactive.effect
+        @reactive.event(request)
+        def _open():
+            req = request.get()
+            if req is not None:
+                opener(req[1])
+
+        def _request(proposal: dict) -> None:
+            seq["n"] += 1
+            request.set((seq["n"], proposal))
+
+        return _request
 
     def refresh() -> None:
         queue.set(
@@ -560,10 +593,24 @@ def server(input: Inputs, output: Outputs, session: Session):
                 selected.set(i)
                 return
 
-    def on_decide(proposal: dict, verdict: str, params: dict | None = None) -> None:
+    def on_decide(
+        proposal: dict,
+        verdict: str,
+        params: dict | None = None,
+        reason: str | None = None,
+    ) -> None:
         _select(proposal)
         decisions.write(
-            [decisions.record(proposal, verdict, params=params)], DECISIONS_DIR
+            [
+                decisions.record(
+                    proposal,
+                    verdict,
+                    params=params,
+                    decided_by=decisions.current_actor(),
+                    reason=reason,
+                )
+            ],
+            DECISIONS_DIR,
         )
         state = drawer_state.get()
         if state is not None and state["proposal"]["id"] == proposal["id"]:
@@ -590,6 +637,12 @@ def server(input: Inputs, output: Outputs, session: Session):
                     ui.input_text(f"edit_{key}", key, value=str(value))
                     for key, value in proposal["params"].items()
                 ],
+                ui.input_text_area(
+                    "edit_reason",
+                    "Reason",
+                    value=proposal.get("rationale") or "",
+                    width="100%",
+                ),
                 title="Edit proposal",
                 footer=[
                     ui.input_action_button(
@@ -610,9 +663,54 @@ def server(input: Inputs, output: Outputs, session: Session):
         params = {key: input[f"edit_{key}"]().strip() for key in proposal["params"]}
         if any(not v for v in params.values()):
             return  # keep the modal open until every field has a value
+        reason = input.edit_reason().strip() or None
         edit_target.set(None)
         ui.modal_remove()
-        on_decide(proposal, "edited", params=params)
+        on_decide(proposal, "edited", params=params, reason=reason)
+
+    def _open_reject_modal(proposal: dict) -> None:
+        _select(proposal)
+        reject_target.set(proposal)
+        ui.modal_show(
+            ui.modal(
+                ui.p(_row_label(proposal)),
+                ui.p(
+                    proposal.get("rationale") or "(no rationale)", class_="text-muted"
+                ),
+                ui.input_text_area(
+                    "reject_reason",
+                    "Reason (optional)",
+                    value="",
+                    placeholder="why was this wrong?",
+                    width="100%",
+                ),
+                title="Reject proposal",
+                footer=[
+                    ui.input_action_button(
+                        "reject_save", "Confirm reject", class_="btn btn-danger"
+                    ),
+                    ui.modal_button("Cancel"),
+                ],
+                easy_close=True,
+            )
+        )
+
+    @reactive.effect
+    @reactive.event(input.reject_save)
+    def _reject_save():
+        proposal = reject_target.get()
+        if proposal is None:
+            return
+        reason = input.reject_reason().strip() or None
+        reject_target.set(None)
+        ui.modal_remove()
+        on_decide(proposal, "rejected", reason=reason)
+
+    # Row buttons live in a Shiny module; route their modal triggers through the
+    # top-level relay so the modal input ids stay un-namespaced (see
+    # `_module_modal_relay`). Keyboard/drawer paths call the openers directly.
+    _request_reject = _module_modal_relay(_open_reject_modal)
+    _request_edit = _module_modal_relay(on_edit)
 
     @reactive.effect
     @reactive.event(input.key_action)
@@ -643,7 +741,10 @@ def server(input: Inputs, output: Outputs, session: Session):
                 # screen — route the keypress to the drawer instead.
                 on_open(proposal)
             else:
-                on_decide(proposal, "approved" if action == "approve" else "rejected")
+                if action == "approve":
+                    on_decide(proposal, "approved")
+                else:
+                    _open_reject_modal(proposal)
         elif action == "skip":
             on_decide(rows[sel], "skipped")
         elif action == "edit":
@@ -675,7 +776,8 @@ def server(input: Inputs, output: Outputs, session: Session):
                     proposal=proposal,
                     on_decide=on_decide,
                     on_open=on_open,
-                    on_edit=on_edit,
+                    on_edit=_request_edit,
+                    on_reject=_request_reject,
                 )
                 wired.add(row_id)
             cards.append(
@@ -739,7 +841,9 @@ def server(input: Inputs, output: Outputs, session: Session):
     @reactive.effect
     @reactive.event(input.drawer_reject)
     def _drawer_reject():
-        _decide_from_drawer("rejected")
+        state = drawer_state.get()
+        if state is not None:
+            _open_reject_modal(state["proposal"])
 
     @reactive.effect
     @reactive.event(input.drawer_skip)
@@ -789,7 +893,7 @@ def server(input: Inputs, output: Outputs, session: Session):
     def _approve_visible():
         decisions.write(
             [
-                decisions.record(p, "approved")
+                decisions.record(p, "approved", decided_by=decisions.current_actor())
                 for p in queue.get()
                 if p["action"] not in review_queue.HIGH_STAKES_ACTIONS
             ],
