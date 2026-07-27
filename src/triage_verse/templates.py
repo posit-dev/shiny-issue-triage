@@ -10,6 +10,7 @@ TEMPLATE_NAMES = (
     "close-not-planned",
     "close-duplicate",
     "close-duplicate-cross-repo",
+    "link-duplicate",
 )
 ALLOWED_PLACEHOLDERS = frozenset({"canonical_url"})
 DEFAULT_DIR = "config/templates"
