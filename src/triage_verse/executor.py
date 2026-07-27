@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+from . import db
 from . import gh as gh_mod
 from . import jsonl_log, prompts, review_queue
 from . import templates as templates_mod
@@ -60,6 +61,7 @@ CLOSE_REASON_MAP = {
     "stale": ("not planned", "close-not-planned"),
     "not-planned": ("not planned", "close-not-planned"),
 }
+TRANSFER_LABEL = "wrong location"
 
 _REF_FULL = re.compile(r"^([\w.-]+/[\w.-]+)#(\d+)$")
 _REF_URL = re.compile(r"^https://github\.com/([\w.-]+/[\w.-]+)/issues/(\d+)$")
@@ -118,9 +120,21 @@ def select_auto(proposals, decided_ids, promoted, *, audit_rate: float) -> list[
 
 
 def plan_decision(
-    decision: dict, issue: dict, *, allowed: set[str], tmpl: dict[str, str]
+    decision: dict,
+    issue: dict,
+    *,
+    allowed: set[str],
+    tmpl: dict[str, str],
+    con: sqlite3.Connection | None = None,
 ) -> tuple[list[dict], str | None]:
-    """Turn one decision into allowlisted mutations, or an error message."""
+    """Turn one decision into allowlisted mutations, or an error message.
+
+    `con` is the mirror. When supplied (as `execute` always does), a
+    `link-duplicate` additionally requires its canonical issue to still have a
+    mirror row: the comment it posts is public and names that issue, and sync
+    reconciliation deletes rows only for issues GitHub no longer lists. Callers
+    without a mirror (unit tests, dry planning) may omit it and skip that check.
+    """
     action = decision["action"]
     params = decision.get("params") or {}
 
@@ -185,6 +199,41 @@ def plan_decision(
             {"kind": "comment", "body": body},
             {"kind": "close", "reason": "not planned"},
         ], None
+
+    if action == "link-duplicate":
+        canonical = params.get("canonical")
+        if not canonical:
+            return [], "link-duplicate requires a canonical target"
+        ref = parse_issue_ref(str(canonical), decision["repo"])
+        if ref is None:
+            return [], f"cannot parse canonical issue ref: {canonical!r}"
+        if ref == (decision["repo"], decision["issue"]):
+            return [], "canonical target is the issue itself"
+        if con is not None and db.get_issue(con, ref[0], ref[1]) is None:
+            return (
+                [],
+                f"canonical issue not in mirror: {ref[0]}#{ref[1]} (retired by sync"
+                " reconciliation or never synced); re-review before commenting",
+            )
+        body = templates_mod.render(
+            tmpl, "link-duplicate", canonical_url=_issue_url(*ref)
+        )
+        return [{"kind": "comment", "body": body}], None
+
+    if action == "suggest-transfer":
+        canonical = params.get("canonical")
+        if not canonical:
+            return [], "suggest-transfer requires a canonical target"
+        ref = parse_issue_ref(str(canonical), decision["repo"])
+        if ref is None:
+            return [], f"cannot parse canonical issue ref: {canonical!r}"
+        if ref[0] == decision["repo"]:
+            return [], "suggest-transfer target is the issue's own repo"
+        if TRANSFER_LABEL not in allowed:
+            return [], f"label not in allowlist: {TRANSFER_LABEL!r}"
+        # Labels the issue for a human to move. The executor has no transfer
+        # capability and never gains one; see the Transfers tab in the review app.
+        return [{"kind": "add-label", "label": TRANSFER_LABEL}], None
 
     return [], f"action not allowlisted: {action!r}"
 
@@ -423,7 +472,9 @@ def execute(
             jsonl_log.append_weekly([rec], results_dir)
             counts["stale-needs-rereview"] += 1
             continue
-        mutations, err = plan_decision(decision, issue, allowed=allowed, tmpl=tmpl)
+        mutations, err = plan_decision(
+            decision, issue, allowed=allowed, tmpl=tmpl, con=con
+        )
         if err is not None:
             rec.update(status="error", error=err)
             log(f"ERROR {decision['repo']}#{decision['issue']}: {err}")
@@ -476,8 +527,15 @@ def execute(
     return {"batch_id": batch_id, "counts": counts}
 
 
-def _reverse_mutations(rec: dict) -> list[dict]:
-    """Mutations that reverse one applied result record."""
+def _reverse_mutations(rec: dict) -> list[dict] | None:
+    """Mutations that reverse one applied result record.
+
+    Returns `None` when the action has **no reversal rule at all** -- a distinct
+    outcome from an empty list, which means the rule ran and legitimately found
+    nothing to do (e.g. `add-label` on an issue that already carried the label).
+    `undo` reports the two differently: the former is a visible `not-reversible`
+    result, the latter a successful no-op.
+    """
     action = rec["action"]
     params = rec.get("params") or {}
     prior_labels = rec.get("prior", {}).get("labels", [])
@@ -499,6 +557,18 @@ def _reverse_mutations(rec: dict) -> list[dict]:
         if rec.get("comment_id") is not None:
             muts.append({"kind": "delete-comment", "comment_id": rec["comment_id"]})
         muts.append({"kind": "reopen"})
+    elif action == "link-duplicate":
+        # Posted a comment and closed nothing, so the comment is the whole of it:
+        # deliberately no `reopen` here.
+        if rec.get("comment_id") is not None:
+            muts.append({"kind": "delete-comment", "comment_id": rec["comment_id"]})
+    elif action == "suggest-transfer":
+        # Only ever adds the transfer label (a human does the move), so undo just
+        # takes the label back -- unless the issue already carried it.
+        if TRANSFER_LABEL not in prior_labels:
+            muts.append({"kind": "remove-label", "label": TRANSFER_LABEL})
+    else:
+        return None
     return muts
 
 
@@ -579,7 +649,13 @@ def undo(
         targets = [r for r in targets if (r["repo"], r["issue"]) == ref]
 
     undo_batch_id = uuid.uuid4().hex
-    counts = {"applied": 0, "dry-run": 0, "error": 0, "skipped": 0}
+    counts = {
+        "applied": 0,
+        "dry-run": 0,
+        "error": 0,
+        "skipped": 0,
+        "not-reversible": 0,
+    }
     first_mutation = True
 
     for rec in reversed(targets):
@@ -599,6 +675,19 @@ def undo(
             "executed_at": _now(),
         }
         mutations = _reverse_mutations(rec)
+        if mutations is None:
+            # No reversal rule for this action: say so loudly rather than record a
+            # silent success that also marks the record as already undone.
+            log(
+                f"NOT-REVERSIBLE {header}: no undo rule for action "
+                f"{rec['action']!r}; reverse it by hand on GitHub"
+            )
+            out.update(
+                status="not-reversible", error=f"no undo rule: {rec['action']!r}"
+            )
+            jsonl_log.append_weekly([out], results_dir)
+            counts["not-reversible"] += 1
+            continue
         if not apply:
             for m in mutations:
                 log(f"DRY-RUN {header}: {_describe_reverse(m)}")

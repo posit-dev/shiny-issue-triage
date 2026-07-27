@@ -12,7 +12,16 @@ from . import db
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_ACTIONS = frozenset({"add-label", "set-priority", "close", "close-duplicate"})
+SUPPORTED_ACTIONS = frozenset(
+    {
+        "add-label",
+        "set-priority",
+        "close",
+        "close-duplicate",
+        "link-duplicate",
+        "suggest-transfer",
+    }
+)
 # Actions that must be judged from the full-evidence drawer, never a row snippet
 # or bulk approve.
 HIGH_STAKES_ACTIONS = frozenset({"close", "close-duplicate"})
@@ -76,15 +85,24 @@ def iter_jsonl_records(base_dir: str | pathlib.Path) -> list[dict]:
     return records
 
 
-def _is_closed(con: sqlite3.Connection, repo: str, number: int) -> bool:
+def _not_reviewable(con: sqlite3.Connection, repo: str, number: int) -> bool:
+    """True when the mirror says this issue cannot be reviewed.
+
+    Either it is closed, or it is absent -- which means sync reconciliation
+    retired it because GitHub no longer lists it in this repo (transferred away
+    or deleted), so any proposal about it is moot.
+    """
     issue = db.get_issue(con, repo, number)
-    return issue is not None and issue["state"] != "OPEN"
+    return issue is None or issue["state"] != "OPEN"
 
 
+# Recorded when a human confirms they moved an issue a suggest-transfer proposal
+# pointed at. Terminal so the proposal cannot bounce back into the main queue.
+TRANSFER_DONE_VERDICT = "transferred"
 # Verdicts that remove a proposal from the queue for good (subject to a stale
 # bounce). "skipped" is deliberately NOT here: skip means "not now", so the
 # proposal is kept and merely demoted (see below).
-TERMINAL_VERDICTS = frozenset({"approved", "edited", "rejected"})
+TERMINAL_VERDICTS = frozenset({"approved", "edited", "rejected", TRANSFER_DONE_VERDICT})
 
 
 def _issue_updated_after(
@@ -130,6 +148,11 @@ def load_undecided(
             skipped_at[pid] = t
 
     proposals = []
+    # Proposals dropped because the mirror has NO row for the issue at all --
+    # distinct from present-but-closed. Reported in aggregate after the loop so a
+    # short queue caused by a stale or partial mirror is not read as "nothing to
+    # review".
+    absent_from_mirror = 0
     for r in iter_jsonl_records(proposals_dir):
         pid = r.get("id")
         if not valid_module_id(pid):
@@ -143,11 +166,11 @@ def load_undecided(
                 pid,
             )
             continue
-        if (
-            pid in terminal_ids
-            or r.get("action") not in SUPPORTED_ACTIONS
-            or _is_closed(con, r["repo"], r["issue"])
-        ):
+        if pid in terminal_ids or r.get("action") not in SUPPORTED_ACTIONS:
+            continue
+        if _not_reviewable(con, r["repo"], r["issue"]):
+            if db.get_issue(con, r["repo"], r["issue"]) is None:
+                absent_from_mirror += 1
             continue
         rec = {**r, "stale": True} if pid in stale_at else dict(r)
         skip_t = skipped_at.get(pid) if isinstance(pid, str) else None
@@ -159,6 +182,15 @@ def load_undecided(
         ):
             rec["deferred"] = True
         proposals.append(rec)
+    if absent_from_mirror:
+        logger.warning(
+            "dropped %d proposal(s): the mirror has no row for the issue, so it was "
+            "either retired by 'triage-verse sync --full' (transferred away or "
+            "deleted on GitHub) or never synced. Run 'triage-verse sync --full' to "
+            "confirm the mirror is current; proposals still missing after that "
+            "refer to issues GitHub no longer has.",
+            absent_from_mirror,
+        )
     return sorted(
         proposals,
         key=lambda r: (r.get("deferred", False), -(r.get("confidence") or 0.0)),
@@ -178,6 +210,81 @@ def duplicate_sibling(proposal: dict) -> tuple[str, int] | None:
         if (repo, number) != (proposal["repo"], proposal["issue"]):
             return repo, number
     return None
+
+
+_CANONICAL_REF = re.compile(
+    r"^(?:([\w.-]+/[\w.-]+)#\d+|https://github\.com/([\w.-]+/[\w.-]+)/issues/\d+)$"
+)
+
+
+def transfer_destination(record: dict) -> str | None:
+    """Repo a suggest-transfer points at, from `params.canonical`.
+
+    Works for proposal and decision records alike: decisions carry `params` but
+    not `evidence`, so the canonical ref is the only shared source.
+    """
+    canonical = (record.get("params") or {}).get("canonical")
+    if not isinstance(canonical, str):
+        return None
+    m = _CANONICAL_REF.match(canonical.strip())
+    if m is None:
+        return None
+    return m.group(1) or m.group(2)
+
+
+def _label_applied_proposals(results_dir: str | pathlib.Path) -> set[str]:
+    """Proposals whose suggest-transfer label actually landed on GitHub.
+
+    Reads the results log: a proposal qualifies once it has an `applied`
+    suggest-transfer result that has not since been undone.
+    """
+    applied: dict[str, str] = {}  # result id -> proposal id
+    undone: set[str] = set()
+    for r in iter_jsonl_records(results_dir):
+        if r.get("action") == "undo":
+            if r.get("status") == "applied" and r.get("undoes_result_id"):
+                undone.add(r["undoes_result_id"])
+            continue
+        if (
+            r.get("action") == "suggest-transfer"
+            and r.get("status") == "applied"
+            and r.get("proposal_id")
+            and r.get("id")
+        ):
+            applied[r["id"]] = r["proposal_id"]
+    return {pid for rid, pid in applied.items() if rid not in undone}
+
+
+def pending_transfers(
+    decisions_dir: str | pathlib.Path,
+    results_dir: str | pathlib.Path | None = None,
+) -> list[dict]:
+    """Approved suggest-transfer decisions not yet marked transferred, newest first.
+
+    With `results_dir`, only suggestions whose `wrong location` label has actually
+    been applied by `execute --apply` are listed. That ordering matters: marking a
+    row transferred writes a later, terminal decision for the same proposal, which
+    would cancel a still-unexecuted approval and lose the label silently. Without
+    `results_dir` the list is unfiltered (approval-only), which is what a caller
+    that has no results log can know.
+    """
+    latest: dict[str, dict] = {}
+    for r in iter_jsonl_records(decisions_dir):
+        pid = r.get("proposal_id")
+        if pid is None or r.get("action") != "suggest-transfer":
+            continue
+        cur = latest.get(pid)
+        if cur is None or r.get("decided_at", "") >= cur.get("decided_at", ""):
+            latest[pid] = r
+    pending = [d for d in latest.values() if d.get("verdict") in ("approved", "edited")]
+    if results_dir is not None:
+        applied = _label_applied_proposals(results_dir)
+        pending = [d for d in pending if d["proposal_id"] in applied]
+    return sorted(
+        pending,
+        key=lambda d: d.get("decided_at", ""),
+        reverse=True,
+    )
 
 
 def issue_snippet(title: str, body: str | None, max_chars: int = 280) -> str:

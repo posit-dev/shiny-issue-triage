@@ -102,3 +102,24 @@ def test_audit_sampling_is_deterministic():
     assert [p["audit"] for p in a] == [p["audit"] for p in b]
     flagged = sum(1 for p in a if p["audit"])
     assert 3 <= flagged <= 20  # ~10% of 100, deterministic band
+
+
+def test_new_actions_are_not_auto_eligible():
+    from triage_verse import executor
+
+    assert "suggest-transfer" not in executor.AUTO_ELIGIBLE
+    assert "link-duplicate" not in executor.AUTO_ELIGIBLE
+
+
+def test_select_auto_never_picks_a_suggest_transfer():
+    from triage_verse import executor
+
+    proposals = [
+        {"id": "p1", "action": "suggest-transfer", "confidence": 1.0},
+        {"id": "p2", "action": "link-duplicate", "confidence": 1.0},
+    ]
+    promoted = {
+        "suggest-transfer": {"confidence_floor": 0.0},
+        "link-duplicate": {"confidence_floor": 0.0},
+    }
+    assert executor.select_auto(proposals, set(), promoted, audit_rate=0.0) == []

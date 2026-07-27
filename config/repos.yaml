@@ -1,6 +1,18 @@
 # Repo scope for the triage hub (one tenant = one file like this).
 # Start small: the active entries below are the mirror pilot. Uncomment the
 # remaining repos when we're ready to run on the full shinyverse.
+#
+# SYNC POLICY (measured 2026-07-27; paging is 50/page issues+PRs, 100/page
+# comments). The active pilot is a ~30-request full sync, so `sync --full` is
+# cheap enough to run on every scheduled pass. Prefer that while it holds: full
+# syncs are what let sync reconcile issues GitHub no longer lists (transferred
+# or deleted), because an incremental walk stops at its cursor and absence from
+# that window carries no information.
+#
+# Uncommenting rstudio/shiny or posit-dev/py-shiny ends that. shiny alone is
+# ~195 requests -- 6.5x the entire current pilot -- and py-shiny ~75. With
+# either one active, switch to incremental syncs and run `--full` sparingly.
+# Comments dominate the cost, not issues.
 repositories:
   - rstudio/reactlog
   - rstudio/shinytest2
@@ -24,6 +36,7 @@ repositories:
   # - rstudio/plumber
   # - rstudio/pool
   # - rstudio/sass
+  # NB: enabling the next line means `--full` sparingly (see SYNC POLICY above)
   # - rstudio/shiny
   # - rstudio/shinycoreci
   # - schloerke/shinyjster
@@ -34,6 +47,7 @@ repositories:
   # - rstudio/thematic
   # - rstudio/webdriver
   # - rstudio/websocket
+  # NB: enabling the next line means `--full` sparingly (see SYNC POLICY above)
   # - posit-dev/py-shiny
   # - posit-dev/py-htmltools
   # - posit-dev/py-shinywidgets

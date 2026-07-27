@@ -110,3 +110,27 @@ def test_current_actor_falls_back_to_unknown(monkeypatch):
     monkeypatch.setattr(gh, "run_gh", lambda args, **kwargs: "")
     monkeypatch.delenv("USER", raising=False)
     assert decisions.current_actor() == "unknown"
+
+
+def test_record_transferred_reuses_the_proposal_id():
+    approved = {
+        "id": "d1",
+        "proposal_id": "p1",
+        "repo": "r/a",
+        "issue": 1,
+        "action": "suggest-transfer",
+        "params": {"canonical": "r/b#2", "cross_repo_option": "transfer"},
+        "verdict": "approved",
+        "confidence": 0.9,
+        "decided_at": "2026-07-01T00:00:00Z",
+    }
+    rec = decisions.record_transferred(approved, decided_by="octocat")
+    assert rec["proposal_id"] == "p1"
+    assert rec["verdict"] == "transferred"
+    assert rec["action"] == "suggest-transfer"
+    assert rec["params"] == {"canonical": "r/b#2", "cross_repo_option": "transfer"}
+    assert rec["repo"] == "r/a" and rec["issue"] == 1
+    assert rec["id"] != "d1"
+    assert "proposed_params" not in rec
+    # Attribution is the confirming actor, not whoever approved the suggestion.
+    assert rec["decided_by"] == "octocat"

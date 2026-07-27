@@ -54,6 +54,27 @@ def record(
     return rec
 
 
+def record_transferred(decision: dict, *, decided_by: str) -> dict:
+    """Close out an approved suggest-transfer once a human has moved the issue.
+
+    Takes the *approved decision* rather than a proposal, since that is what the
+    Transfers worklist holds. `record` reads `proposal["id"]`, so the decision's
+    `proposal_id` is mapped onto `id` to keep both records pointing at the same
+    proposal.
+
+    `decided_by` is whoever confirmed the move, which is not necessarily whoever
+    approved the suggestion -- so it is supplied fresh rather than copied off
+    `decision`.
+    """
+    from . import review_queue
+
+    return record(
+        {**decision, "id": decision["proposal_id"]},
+        review_queue.TRANSFER_DONE_VERDICT,
+        decided_by=decided_by,
+    )
+
+
 def write(
     records: list[dict], base_dir: str | pathlib.Path, *, today: str | None = None
 ) -> pathlib.Path:

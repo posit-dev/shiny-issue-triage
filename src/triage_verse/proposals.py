@@ -8,6 +8,25 @@ import uuid
 
 from . import jsonl_log
 
+# cross_repo_option -> the action that honestly describes the outcome. Anything
+# unrecognized, and any same-repo pair, degrades to close-duplicate: that is
+# exactly today's behavior, so a missing or malformed option cannot change what
+# happens to a pair.
+CROSS_REPO_ACTIONS = {
+    "close-and-link": "close-duplicate",
+    "keep-both-link": "link-duplicate",
+    "transfer": "suggest-transfer",
+}
+
+
+def cross_repo_action(option: object, repo_a: str, repo_b: str) -> str:
+    """Action for a duplicate verdict, given its cross-repo option."""
+    if repo_a == repo_b:
+        return "close-duplicate"
+    if not isinstance(option, str):
+        return "close-duplicate"
+    return CROSS_REPO_ACTIONS.get(option, "close-duplicate")
+
 
 def build(con, run_id: str) -> list[dict]:
     records: list[dict] = []
@@ -64,7 +83,7 @@ def build(con, run_id: str) -> list[dict]:
         records.append(
             _rec(
                 base,
-                "close-duplicate",
+                cross_repo_action(d["cross_repo_option"], d["repo_a"], d["repo_b"]),
                 {
                     "canonical": json.loads(d["canonical_json"])
                     if d["canonical_json"]

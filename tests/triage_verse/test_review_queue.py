@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from triage_verse import db, jsonl_log, review_queue
 
 
@@ -59,7 +61,10 @@ def test_load_undecided_sorts_by_confidence_descending(tmp_path):
             },
         ],
     )
-    rows = review_queue.load_undecided(proposals_dir, decisions_dir, _mirror(tmp_path))
+    con = _mirror(tmp_path)
+    _seed_issue(con, "r/r", 1, "OPEN")
+    _seed_issue(con, "r/r", 2, "OPEN")
+    rows = review_queue.load_undecided(proposals_dir, decisions_dir, con)
     assert [r["id"] for r in rows] == ["a", "b"]
 
 
@@ -89,7 +94,10 @@ def test_load_undecided_excludes_terminal_verdicts(tmp_path):
         decisions_dir / "2026" / "W27.jsonl",
         [{"id": "d1", "proposal_id": "a", "verdict": "approved"}],
     )
-    rows = review_queue.load_undecided(proposals_dir, decisions_dir, _mirror(tmp_path))
+    con = _mirror(tmp_path)
+    _seed_issue(con, "r/r", 1, "OPEN")
+    _seed_issue(con, "r/r", 2, "OPEN")
+    rows = review_queue.load_undecided(proposals_dir, decisions_dir, con)
     assert [r["id"] for r in rows] == ["b"]
 
 
@@ -186,7 +194,9 @@ def test_load_undecided_skips_malformed_lines(tmp_path):
         "not json\n",
         encoding="utf-8",
     )
-    rows = review_queue.load_undecided(proposals_dir, decisions_dir, _mirror(tmp_path))
+    con = _mirror(tmp_path)
+    _seed_issue(con, "r/r", 1, "OPEN")
+    rows = review_queue.load_undecided(proposals_dir, decisions_dir, con)
     assert [r["id"] for r in rows] == ["a"]
 
 
@@ -226,7 +236,11 @@ def test_load_undecided_includes_close_actions(tmp_path):
             },
         ],
     )
-    rows = review_queue.load_undecided(proposals_dir, decisions_dir, _mirror(tmp_path))
+    con = _mirror(tmp_path)
+    _seed_issue(con, "r/r", 1, "OPEN")
+    _seed_issue(con, "r/r", 2, "OPEN")
+    _seed_issue(con, "r/r", 3, "OPEN")
+    rows = review_queue.load_undecided(proposals_dir, decisions_dir, con)
     assert [r["id"] for r in rows] == ["b", "c", "a"]
 
 
@@ -252,7 +266,10 @@ def test_load_undecided_excludes_out_of_scope_actions(tmp_path):
             },
         ],
     )
-    rows = review_queue.load_undecided(proposals_dir, decisions_dir, _mirror(tmp_path))
+    con = _mirror(tmp_path)
+    _seed_issue(con, "r/r", 1, "OPEN")
+    _seed_issue(con, "r/r", 2, "OPEN")
+    rows = review_queue.load_undecided(proposals_dir, decisions_dir, con)
     assert [r["id"] for r in rows] == ["a"]
 
 
@@ -311,7 +328,9 @@ def test_load_undecided_excludes_closed_issues(tmp_path):
     assert [r["id"] for r in rows] == ["a"]
 
 
-def test_load_undecided_keeps_proposals_missing_from_mirror(tmp_path):
+def test_load_undecided_excludes_proposals_missing_from_mirror(tmp_path):
+    """A row absent from the mirror means sync reconciliation retired it
+    (transferred away or deleted), so it must not linger in the queue."""
     proposals_dir = tmp_path / "proposals"
     decisions_dir = tmp_path / "decisions"
     _write_jsonl(
@@ -327,7 +346,7 @@ def test_load_undecided_keeps_proposals_missing_from_mirror(tmp_path):
         ],
     )
     rows = review_queue.load_undecided(proposals_dir, decisions_dir, _mirror(tmp_path))
-    assert [r["id"] for r in rows] == ["a"]
+    assert rows == []
 
 
 def test_issue_snippet_truncates_long_body():
@@ -545,7 +564,11 @@ def test_load_undecided_skips_invalid_module_ids(tmp_path):
             },
         ],
     )
-    rows = review_queue.load_undecided(proposals_dir, decisions_dir, _mirror(tmp_path))
+    con = _mirror(tmp_path)
+    _seed_issue(con, "r/r", 1, "OPEN")
+    _seed_issue(con, "r/r", 2, "OPEN")
+    _seed_issue(con, "r/r", 3, "OPEN")
+    rows = review_queue.load_undecided(proposals_dir, decisions_dir, con)
     assert [r["id"] for r in rows] == ["ok"]
 
 
@@ -556,3 +579,166 @@ def test_clamp_index():
     assert review_queue.clamp_index(-1, 5) == 0
     assert review_queue.clamp_index(2, 5) == 2
     assert review_queue.clamp_index(7, 5) == 4  # queue shrank under selection
+
+
+def test_transfer_destination_from_canonical_ref():
+    rec = {"params": {"canonical": "posit-dev/py-shiny#12"}}
+    assert review_queue.transfer_destination(rec) == "posit-dev/py-shiny"
+
+
+def test_transfer_destination_from_canonical_url():
+    rec = {"params": {"canonical": "https://github.com/posit-dev/py-shiny/issues/12"}}
+    assert review_queue.transfer_destination(rec) == "posit-dev/py-shiny"
+
+
+@pytest.mark.parametrize(
+    "params", [{}, {"canonical": None}, {"canonical": "nonsense"}, {"canonical": 7}]
+)
+def test_transfer_destination_none_when_unparseable(params):
+    assert review_queue.transfer_destination({"params": params}) is None
+
+
+def _tdec(pid, verdict, at, action="suggest-transfer"):
+    return {
+        "id": f"d-{pid}-{at}",
+        "proposal_id": pid,
+        "repo": "r/a",
+        "issue": 1,
+        "action": action,
+        "params": {"canonical": "r/b#2", "cross_repo_option": "transfer"},
+        "verdict": verdict,
+        "confidence": 0.9,
+        "decided_at": at,
+    }
+
+
+def test_pending_transfers_lists_approved_only(tmp_path):
+    d = tmp_path / "decisions"
+    d.mkdir()
+    (d / "a.jsonl").write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                _tdec("p1", "approved", "2026-07-01T00:00:00Z"),
+                _tdec("p2", "rejected", "2026-07-02T00:00:00Z"),
+                _tdec("p3", "approved", "2026-07-03T00:00:00Z"),
+                _tdec("p4", "approved", "2026-07-04T00:00:00Z", action="add-label"),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    rows = review_queue.pending_transfers(d)
+    assert [r["proposal_id"] for r in rows] == ["p3", "p1"]
+
+
+def test_pending_transfers_drops_marked_transferred(tmp_path):
+    d = tmp_path / "decisions"
+    d.mkdir()
+    (d / "a.jsonl").write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                _tdec("p1", "approved", "2026-07-01T00:00:00Z"),
+                _tdec("p1", "transferred", "2026-07-05T00:00:00Z"),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert review_queue.pending_transfers(d) == []
+
+
+def test_transferred_is_terminal_so_it_does_not_return_to_the_queue():
+    assert "transferred" in review_queue.TERMINAL_VERDICTS
+
+
+def test_new_actions_are_supported_but_not_high_stakes():
+    assert {"link-duplicate", "suggest-transfer"} <= review_queue.SUPPORTED_ACTIONS
+    assert not (
+        {"link-duplicate", "suggest-transfer"} & review_queue.HIGH_STAKES_ACTIONS
+    )
+
+
+def test_proposal_for_a_retired_issue_leaves_the_queue(tmp_path):
+    """A missing mirror row means the issue was transferred or deleted."""
+    con = db.connect(tmp_path / "m.sqlite")
+    props = tmp_path / "proposals"
+    props.mkdir()
+    (props / "a.jsonl").write_text(
+        json.dumps(
+            {
+                "id": "p1",
+                "repo": "r/a",
+                "issue": 1,
+                "action": "add-label",
+                "params": {"label": "regression"},
+                "confidence": 0.9,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    decisions_dir = tmp_path / "decisions"
+    decisions_dir.mkdir()
+
+    # No issues row at all: the mirror has no such issue.
+    assert review_queue.load_undecided(props, decisions_dir, con) == []
+
+
+def test_proposals_absent_from_mirror_are_reported_once(tmp_path, caplog):
+    """A short queue caused by a stale/partial mirror must not look like an
+    empty one -- one aggregate warning, not one per proposal."""
+    con = _mirror(tmp_path)
+    _seed_issue(con, "r/r", 1, "OPEN")  # present and reviewable
+    _seed_issue(con, "r/r", 2, "CLOSED")  # present but closed: not counted
+    proposals_dir = tmp_path / "proposals"
+    decisions_dir = tmp_path / "decisions"
+    _write_jsonl(
+        proposals_dir / "2026" / "W27.jsonl",
+        [
+            {
+                "id": f"p{n}",
+                "repo": "r/r",
+                "issue": n,
+                "action": "add-label",
+                "confidence": 0.5,
+            }
+            # 3 and 4 have no mirror row at all.
+            for n in (1, 2, 3, 4)
+        ],
+    )
+    with caplog.at_level("WARNING", logger="triage_verse.review_queue"):
+        rows = review_queue.load_undecided(proposals_dir, decisions_dir, con)
+    assert [r["id"] for r in rows] == ["p1"]
+    warnings = [
+        r.getMessage()
+        for r in caplog.records
+        if "no row for the issue" in r.getMessage()
+    ]
+    assert len(warnings) == 1
+    assert "dropped 2 proposal(s)" in warnings[0]
+
+
+def test_no_absent_warning_when_every_issue_is_mirrored(tmp_path, caplog):
+    con = _mirror(tmp_path)
+    _seed_issue(con, "r/r", 1, "OPEN")
+    _seed_issue(con, "r/r", 2, "CLOSED")
+    proposals_dir = tmp_path / "proposals"
+    decisions_dir = tmp_path / "decisions"
+    _write_jsonl(
+        proposals_dir / "2026" / "W27.jsonl",
+        [
+            {
+                "id": f"p{n}",
+                "repo": "r/r",
+                "issue": n,
+                "action": "add-label",
+                "confidence": 0.5,
+            }
+            for n in (1, 2)
+        ],
+    )
+    with caplog.at_level("WARNING", logger="triage_verse.review_queue"):
+        review_queue.load_undecided(proposals_dir, decisions_dir, con)
+    assert not [r for r in caplog.records if "no row for the issue" in r.getMessage()]

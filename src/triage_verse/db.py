@@ -555,6 +555,44 @@ def get_embed_hash(con: sqlite3.Connection, repo: str, number: int) -> str | Non
     return row["embed_hash"] if row else None
 
 
+def delete_issue(con: sqlite3.Connection, repo: str, number: int) -> None:
+    """Remove an issue and its derived rows from the mirror.
+
+    For issues GitHub no longer has in `repo` -- transferred away, or deleted.
+    The embedding rows must go too, and the `issues` row must go rather than
+    merely being marked closed: `embed_repo` has no state filter, so a surviving
+    row would be re-embedded, and `knn` ignores state, so a surviving vector
+    would keep surfacing as a duplicate candidate.
+
+    Classification and dedup history keyed to (repo, number) is deliberately
+    left in place, as are the append-only JSONL logs, so the audit trail
+    survives the row.
+
+    Non-PR issues only. `issues` and `prs` share the `(repo, number)` namespace
+    but `comments`, `issue_vectors`, and `vec_issues` do not carry `is_pr`, so
+    the `is_pr=0` condition is enforced up front rather than only on the `issues`
+    DELETE: called with a PR number, an unguarded version would strip that PR's
+    comments and vector while leaving its row behind. A PR is a no-op instead.
+    """
+    existing = con.execute(
+        "SELECT is_pr FROM issues WHERE repo=? AND number=?", (repo, number)
+    ).fetchone()
+    if existing is not None and existing["is_pr"]:
+        return
+    row = con.execute(
+        "SELECT id FROM issue_vectors WHERE repo=? AND number=?", (repo, number)
+    ).fetchone()
+    if row is not None:
+        con.execute("DELETE FROM vec_issues WHERE rowid=?", (row["id"],))
+        con.execute(
+            "DELETE FROM issue_vectors WHERE repo=? AND number=?", (repo, number)
+        )
+    con.execute("DELETE FROM comments WHERE repo=? AND issue_number=?", (repo, number))
+    con.execute(
+        "DELETE FROM issues WHERE repo=? AND number=? AND is_pr=0", (repo, number)
+    )
+
+
 def knn(
     con: sqlite3.Connection, vector: list[float], k: int
 ) -> list[tuple[str, int, float]]:

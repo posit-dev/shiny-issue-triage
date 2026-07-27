@@ -19,6 +19,7 @@ ISSUES_QUERY = """
 query($owner: String!, $name: String!, $after: String) {
   repository(owner: $owner, name: $name) {
     issues(first: 50, orderBy: {field: UPDATED_AT, direction: DESC}, after: $after) {
+      totalCount
       pageInfo { hasNextPage endCursor }
       nodes {
         number title body state stateReason
@@ -68,15 +69,24 @@ def _walk_updated_desc(
     upsert: Callable[[sqlite3.Connection, dict], int],
     graphql: Callable,
     full: bool,
-) -> int:
+) -> tuple[int, int | None]:
+    """Walk one UPDATED_AT DESC connection; returns (upserted, reported totalCount).
+
+    The total is whatever the connection reported on its first page, or `None`
+    when the query does not ask for `totalCount`. Callers use it to tell an
+    exhaustive walk from one that pagination raced (see `reconcile_repo`).
+    """
     owner, name = repo.split("/")
     cursor = None if full else db.get_cursor(con, repo, kind)
     after = None
     newest = cursor
     count = 0
+    total: int | None = None
     while True:
         data = graphql(query, {"owner": owner, "name": name, "after": after})
         conn = data["repository"][connection_key]
+        if total is None:
+            total = conn.get("totalCount")
         stop = False
         for node in conn["nodes"]:
             if cursor is not None and node["updatedAt"] < cursor:
@@ -91,7 +101,72 @@ def _walk_updated_desc(
     if newest is not None:
         db.set_cursor(con, repo, kind, newest)
     con.commit()
-    return count
+    return count, total
+
+
+def reconcile_repo(
+    con: sqlite3.Connection,
+    repo: str,
+    seen: set[int],
+    *,
+    total_count: int | None = None,
+    log: Callable[[str], None] = print,
+) -> list[int]:
+    """Delete mirrored issues of `repo` that GitHub no longer lists.
+
+    Only sound after an exhaustive walk (`full=True`): an incremental sync stops
+    at the stored cursor and legitimately never sees older issues, so absence
+    there means nothing. A transferred issue leaves its source repo altogether,
+    so absence from a full walk is the only signal available.
+
+    Refuses to act on two kinds of incomplete walk:
+
+    * **Short walk.** `total_count` is the issue count GitHub itself reported for
+      the connection. The walk pages an `UPDATED_AT DESC` ordering, so an issue
+      that gets a comment mid-walk while sitting on a not-yet-visited page jumps
+      ahead of the cursor and is never returned. Upserts do not care, but
+      deletion very much does, so seeing fewer issues than GitHub reported means
+      no deletion at all this run. In a healthy repo there are normally zero
+      deletion candidates anyway, so the guard costs nothing.
+    * **Empty response.** The walk saw no issues at all but the mirror holds
+      some: an exception-free empty response is far more likely to mean Issues
+      are disabled, a permissions problem, or an eventual-consistency blip than a
+      repo that genuinely lost every issue. A truly empty repo has no mirrored
+      rows either, so the guard costs nothing in the legitimate case.
+    """
+    rows = con.execute(
+        "SELECT number FROM issues WHERE repo=? AND is_pr=0", (repo,)
+    ).fetchall()
+    if total_count is not None and len(seen) < total_count:
+        log(
+            f"  reconcile {repo}: REFUSING to retire anything -- the walk saw "
+            f"{len(seen)} issue(s) but GitHub reports {total_count}, so pagination "
+            f"raced an update and an unseen issue may still be live. Re-run "
+            f"`sync --full` to retire genuinely absent issues."
+        )
+        return []
+    if not seen and rows:
+        log(
+            f"  reconcile {repo}: REFUSING to retire {len(rows)} mirrored issue(s) "
+            f"-- GitHub returned no issues at all, which usually means an API or "
+            f"permissions problem rather than a genuinely empty repo. Re-run "
+            f"`sync --full` once the cause is resolved."
+        )
+        return []
+    gone = sorted(r["number"] for r in rows if r["number"] not in seen)
+    for number in gone:
+        db.delete_issue(con, repo, number)
+    con.commit()
+    # A destructive stage announces itself even when it deletes nothing, so an
+    # operator reading the log can see the step ran at all.
+    if gone:
+        log(
+            f"  reconcile {repo}: retired {len(gone)} issue(s) GitHub no longer "
+            f"lists (transferred or deleted): {gone}"
+        )
+    else:
+        log(f"  reconcile {repo}: nothing to retire")
+    return gone
 
 
 def sync_issues(
@@ -100,14 +175,32 @@ def sync_issues(
     *,
     graphql: Callable = gh_graphql,
     full: bool = False,
+    log: Callable[[str], None] = print,
+    on_retire: Callable[[list[int]], None] | None = None,
 ) -> int:
+    """Sync `repo`'s issues; on a full walk, retire rows GitHub no longer lists.
+
+    `on_retire` receives the retired issue numbers, so a caller (e.g. `sync_all`)
+    can report the destructive step in its machine-readable totals rather than
+    only in the log.
+    """
+    seen: set[int] = set()
+
     def upsert(con_: sqlite3.Connection, node: dict) -> int:
         db.upsert_issue(con_, parse_issue_node(repo, node))
+        seen.add(node["number"])
         return 1
 
-    return _walk_updated_desc(
+    count, total = _walk_updated_desc(
         con, repo, "issues", ISSUES_QUERY, "issues", upsert, graphql, full
     )
+    # A full walk is exhaustive (no cursor, so it exits only when the connection
+    # is drained), and an exception would have propagated before reaching here.
+    if full:
+        gone = reconcile_repo(con, repo, seen, total_count=total, log=log)
+        if on_retire is not None:
+            on_retire(gone)
+    return count
 
 
 PRS_QUERY = """
@@ -180,9 +273,11 @@ def sync_prs(
         db.upsert_pr(con_, pr_row)
         return 1
 
-    return _walk_updated_desc(
+    # PRs are never reconciled, so the reported total is unused here.
+    count, _total = _walk_updated_desc(
         con, repo, "prs", PRS_QUERY, "pullRequests", upsert, graphql, full
     )
+    return count
 
 
 def parse_comment(repo: str, item: dict) -> dict:
@@ -245,11 +340,20 @@ def sync_all(
     log: Callable[[str], None] = print,
 ) -> dict:
     run_id = db.start_run(con, "sync")
-    totals = {"repos": 0, "issues": 0, "prs": 0, "comments": 0}
+    # "retired" counts mirror rows deleted because GitHub no longer lists the
+    # issue: a destructive step, so it is reported in the machine-readable totals
+    # (the --json envelope and the runs table) and not only in the log.
+    totals = {"repos": 0, "issues": 0, "prs": 0, "comments": 0, "retired": 0}
+
+    def note_retired(gone: list[int]) -> None:
+        totals["retired"] += len(gone)
+
     try:
         for repo in repos:
             log(f"syncing {repo} ...")
-            totals["issues"] += sync_issues(con, repo, full=full)
+            totals["issues"] += sync_issues(
+                con, repo, full=full, log=log, on_retire=note_retired
+            )
             totals["prs"] += sync_prs(con, repo, full=full)
             totals["comments"] += sync_comments(con, repo, full=full)
             totals["repos"] += 1

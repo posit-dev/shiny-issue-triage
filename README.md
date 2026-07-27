@@ -30,6 +30,13 @@ Cursors live in the mirror's `repos` table; `--full` ignores them. The
 backfill is resumable: re-running `sync --full` re-upserts idempotently, and
 interrupted incremental syncs simply continue from the last cursor.
 
+`sync --full` is also the only stage that *removes* data: because it walks a
+repo exhaustively, it retires mirrored issues GitHub no longer lists there —
+transferred away, or deleted — dropping the issue's mirror row, its comments,
+and its embedding. Classification and dedup history plus the append-only JSONL
+logs are retained, so the audit trail outlives the row. Incremental syncs never
+retire anything, since stopping at a cursor means absence proves nothing.
+
 `config/repos.yaml` ships the pilot trio active (reactlog, shinytest2,
 py-shinylive); uncomment the rest of the shinyverse when ready to run the full
 fleet.

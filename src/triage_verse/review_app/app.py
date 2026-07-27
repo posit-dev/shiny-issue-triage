@@ -75,7 +75,7 @@ document.addEventListener("keydown", (e) => {
 
 
 def _row_label(proposal: dict) -> str:
-    return f"{proposal['repo']}#{proposal['issue']} — {proposal['action']}: {proposal['params']}"
+    return f"{proposal['repo']}#{proposal['issue']} — {proposal['action']}: {_params_line(proposal)}"
 
 
 def _row_snippet(proposal: dict) -> str:
@@ -122,6 +122,19 @@ def row_ui(proposal: dict, snippet: str):
                     "padding: 0 0.5rem; margin-right: 0.5rem; font-size: 0.8rem;"
                 ),
                 title="Skipped for now; still here until decided or the issue updates.",
+            ),
+        )
+    if proposal["action"] == "suggest-transfer":
+        dest = review_queue.transfer_destination(proposal)
+        header.insert(
+            0,
+            ui.span(
+                f"→ {dest}" if dest else "transfer",
+                style=(
+                    "background-color: #00695c; color: white; border-radius: 999px; "
+                    "padding: 0 0.5rem; margin-right: 0.5rem; font-size: 0.8rem;"
+                ),
+                title="Suggested transfer; a maintainer must move this on GitHub.",
             ),
         )
     if high_stakes:
@@ -201,6 +214,35 @@ def row_server(
         on_edit(proposal)
 
 
+@module.ui
+def transfer_row_ui(decision: dict, dest: str):
+    url = f"https://github.com/{decision['repo']}/issues/{decision['issue']}"
+    return ui.card(
+        ui.card_header(f"{decision['repo']}#{decision['issue']} → {dest}"),
+        ui.p(f"decided {decision.get('decided_at', '(unknown)')}"),
+        ui.p(ui.a("Open on GitHub ↗", href=url, target="_blank")),
+        ui.input_action_button(
+            "mark_done",
+            "Mark transferred",
+            style="background-color: #00695c; color: white;",
+        ),
+    )
+
+
+@module.server
+def transfer_row_server(
+    input: Inputs,
+    output: Outputs,
+    session: Session,
+    decision: dict,
+    on_done: Callable[[dict], None],
+):
+    @reactive.effect
+    @reactive.event(input.mark_done)
+    def _mark_done():
+        on_done(decision)
+
+
 def _table(rows: list[dict], columns: list[str], format_row=None) -> ui.Tag:
     if not rows:
         return ui.p("no data", class_="text-muted")
@@ -276,6 +318,15 @@ def app_audit_reject(item: dict, *, decisions_dir=DECISIONS_DIR) -> str:
         f"triage-verse undo --batch {item['batch_id']}"
         f" --issue {item['repo']}#{item['issue']} --apply"
     )
+
+
+def app_mark_transferred(decision: dict, *, decisions_dir=DECISIONS_DIR) -> str:
+    """Record that a human moved the issue this suggest-transfer pointed at."""
+    decisions.write(
+        [decisions.record_transferred(decision, decided_by=decisions.current_actor())],
+        decisions_dir,
+    )
+    return decision["proposal_id"]
 
 
 def app_tier2_label(repo: str, number: int, *, run_gh=gh.run_gh) -> None:
@@ -360,6 +411,18 @@ def _close_duplicate_params(params: dict) -> str:
     return " · ".join(bits)
 
 
+def _params_line(proposal: dict) -> str:
+    """Proposal params as words, per action."""
+    action = proposal["action"]
+    params = proposal.get("params") or {}
+    if action in ("close-duplicate", "link-duplicate"):
+        return _close_duplicate_params(params)
+    if action == "suggest-transfer":
+        dest = review_queue.transfer_destination(proposal)
+        return f"→ {dest}" if dest else "→ (destination not identified)"
+    return str(params)
+
+
 def _drawer_sibling(proposal: dict) -> list:
     parts = [ui.h4("Duplicate sibling")]
     sibling = review_queue.duplicate_sibling(proposal)
@@ -385,11 +448,28 @@ def _drawer_sibling(proposal: dict) -> list:
     return parts
 
 
+def _drawer_transfer(proposal: dict) -> list:
+    dest = review_queue.transfer_destination(proposal)
+    parts: list = [ui.h4("Suggested destination")]
+    if dest is None:
+        parts.append(ui.p("(destination not identified from the canonical ref)"))
+        return parts
+    parts.append(ui.p(ui.a(dest, href=f"https://github.com/{dest}", target="_blank")))
+    parts.append(
+        ui.p(
+            "Approving only queues the 'wrong location' label — the next "
+            "'execute --apply' applies it, and nothing ever moves the issue. "
+            "Transfer it by hand on GitHub (Transfer issue, in the issue sidebar). "
+            "It appears on the Transfers tab once the label has been applied, and "
+            "stays there until you mark it done.",
+            class_="text-muted",
+        )
+    )
+    return parts
+
+
 def _drawer_proposal(proposal: dict) -> list:
-    if proposal["action"] == "close-duplicate":
-        params_line = _close_duplicate_params(proposal["params"])
-    else:
-        params_line = str(proposal["params"])
+    params_line = _params_line(proposal)
     parts = [
         ui.h4("Proposal"),
         ui.p(f"{proposal['action']}: {params_line}"),
@@ -422,7 +502,10 @@ def _drawer_proposal(proposal: dict) -> list:
             style="display: flex; gap: 0.5rem; margin-bottom: 0.75rem;",
         ),
     ]
-    if proposal["action"] == "close-duplicate":
+    # link-duplicate posts a public comment naming the canonical issue, so the
+    # reviewer needs the same sibling block close-duplicate gets -- not least to
+    # see "(not found in mirror)" when the canonical has been retired.
+    if proposal["action"] in ("close-duplicate", "link-duplicate"):
         parts += _drawer_sibling(proposal)
     parts += [
         ui.h4("Linked evidence"),
@@ -477,6 +560,8 @@ def _drawer_panel(state: dict, item: dict | None):
             *_drawer_comments(item),
         ]
     parts += _drawer_proposal(state["proposal"])
+    if state["proposal"]["action"] == "suggest-transfer":
+        parts += _drawer_transfer(state["proposal"])
     parts.append(ui.p(ui.a("Open on GitHub ↗", href=github_url, target="_blank")))
     return ui.tags.div(*parts, id="drawer-panel")
 
@@ -490,6 +575,20 @@ skipped_panel = ui.nav_panel(
         class_="text-muted",
     ),
     ui.output_ui("skipped_ui"),
+)
+
+
+transfers_panel = ui.nav_panel(
+    "Transfers",
+    ui.h4("Transfer worklist"),
+    ui.p(
+        "Approved transfer suggestions whose 'wrong location' label has been "
+        "applied by 'execute --apply' — approvals still waiting on execution are "
+        "not listed yet. Moving the issue is manual: open it on GitHub, use "
+        "Transfer issue in the sidebar, then mark it done here.",
+        class_="text-muted",
+    ),
+    ui.output_ui("transfers_ui"),
 )
 
 
@@ -519,6 +618,7 @@ app_ui = ui.page_navbar(
         ui.output_ui("queue_ui"),
     ),
     skipped_panel,
+    transfers_panel,
     dashboard_panel,
     audit_panel,
     title="Triage review",
@@ -539,6 +639,8 @@ def server(input: Inputs, output: Outputs, session: Session):
     edit_target = reactive.value[dict | None](None)
     reject_target = reactive.value[dict | None](None)
     wired: set[str] = set()
+    transfers_tick = reactive.value(0)
+    transfers_wired: set[str] = set()
 
     def _module_modal_relay(
         opener: Callable[[dict], None],
@@ -808,6 +910,31 @@ def server(input: Inputs, output: Outputs, session: Session):
         if not rows:
             return ui.p("No skipped items.", class_="text-muted")
         return ui.div(*_render_cards(rows, highlight=False))
+
+    def _mark_transferred(decision: dict) -> None:
+        app_mark_transferred(decision)
+        transfers_tick.set(transfers_tick.get() + 1)
+
+    @render.ui
+    def transfers_ui():
+        transfers_tick.get()
+        # results_dir gates on the label having actually been applied: marking a
+        # row transferred writes a terminal decision that would otherwise cancel a
+        # still-unexecuted approval and drop the 'wrong location' label silently.
+        rows = review_queue.pending_transfers(DECISIONS_DIR, results_dir=RESULTS_DIR)
+        if not rows:
+            return ui.p("No pending transfers.", class_="text-muted")
+        cards = []
+        for d in rows:
+            pid = d["proposal_id"]
+            if not review_queue.valid_module_id(pid):
+                continue
+            dest = review_queue.transfer_destination(d) or "(unknown)"
+            if pid not in transfers_wired:
+                transfer_row_server(pid, decision=d, on_done=_mark_transferred)
+                transfers_wired.add(pid)
+            cards.append(transfer_row_ui(pid, d, dest))
+        return ui.div(*cards)
 
     @render.ui
     def drawer_ui():
