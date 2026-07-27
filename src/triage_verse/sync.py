@@ -14,6 +14,7 @@ from typing import Callable
 
 from . import db
 from .gh import gh_graphql, gh_json
+from .gh import run_gh as gh_run
 
 ISSUES_QUERY = """
 query($owner: String!, $name: String!, $after: String) {
@@ -104,6 +105,55 @@ def _walk_updated_desc(
     return count, total
 
 
+# A retirement candidate set larger than this share of a repo's mirrored issues
+# is treated as a statement about the walk, not about the issues. Floored at an
+# absolute count so that small repos -- where a single retirement trivially
+# exceeds any percentage -- can still reconcile.
+RETIRE_MAX_SHARE = 0.10
+RETIRE_MIN_ALLOWANCE = 5
+
+
+def confirm_retirable(
+    repo: str, number: int, *, run_gh: Callable[..., str] = gh_run
+) -> tuple[str, str | None]:
+    """Ask GitHub about one issue, to justify retiring it (or refuse to).
+
+    Absence from a full walk is suggestive but not proof: pagination over an
+    `UPDATED_AT DESC` connection can skip a perfectly live issue that was
+    commented on mid-walk. So every candidate is confirmed individually.
+
+    Returns ``(verdict, detail)`` where verdict is one of:
+
+    * ``"gone"`` -- GitHub 404s the number; it no longer exists.
+    * ``"transferred"`` -- the number redirects to a *different* repository, and
+      `detail` names it. GitHub keeps a transferred issue's old number pointing
+      at its new home, so this is a positive identification rather than a guess.
+    * ``"live"`` -- the issue is still in this repository; the walk simply
+      missed it. Never retire this.
+    * ``"unknown"`` -- the read failed, and `detail` says how.
+
+    Anything other than a confident ``gone`` or ``transferred`` keeps the row:
+    a rate limit or a bad gateway must never be read as absence.
+    """
+    try:
+        raw = run_gh(["api", f"repos/{repo}/issues/{number}"])
+    except Exception as exc:  # gh.GhError, and anything else the transport raises
+        message = str(exc).strip() or "read failed"
+        if "not found" in message.casefold() or "404" in message:
+            return "gone", None
+        return "unknown", message.splitlines()[0][:120]
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return "unknown", "unparseable response"
+    url = str(data.get("repository_url") or "")
+    marker = "/repos/"
+    dest = url.rsplit(marker, 1)[-1] if marker in url else ""
+    if dest and dest.casefold() != repo.casefold():
+        return "transferred", dest
+    return "live", None
+
+
 def reconcile_repo(
     con: sqlite3.Connection,
     repo: str,
@@ -111,40 +161,40 @@ def reconcile_repo(
     *,
     total_count: int | None = None,
     log: Callable[[str], None] = print,
+    confirm: Callable[[str, int], tuple[str, str | None]] | None = None,
 ) -> list[int]:
-    """Delete mirrored issues of `repo` that GitHub no longer lists.
+    """Retire mirrored issues of `repo` that GitHub confirms it no longer has.
 
     Only sound after an exhaustive walk (`full=True`): an incremental sync stops
     at the stored cursor and legitimately never sees older issues, so absence
-    there means nothing. A transferred issue leaves its source repo altogether,
-    so absence from a full walk is the only signal available.
+    there means nothing.
 
-    Refuses to act on two kinds of incomplete walk:
+    Absence from a full walk only makes an issue a *candidate*. Each candidate is
+    then confirmed against GitHub by `confirm_retirable`, and only a 404 or a
+    redirect into another repository justifies deleting the row. That is what
+    makes this safe on a busy repository, where pagination routinely skips a live
+    issue that was commented on mid-walk.
 
-    * **Short walk.** `total_count` is the issue count GitHub itself reported for
-      the connection. The walk pages an `UPDATED_AT DESC` ordering, so an issue
-      that gets a comment mid-walk while sitting on a not-yet-visited page jumps
-      ahead of the cursor and is never returned. Upserts do not care, but
-      deletion very much does, so seeing fewer issues than GitHub reported means
-      no deletion at all this run. In a healthy repo there are normally zero
-      deletion candidates anyway, so the guard costs nothing.
-    * **Empty response.** The walk saw no issues at all but the mirror holds
-      some: an exception-free empty response is far more likely to mean Issues
-      are disabled, a permissions problem, or an eventual-consistency blip than a
-      repo that genuinely lost every issue. A truly empty repo has no mirrored
-      rows either, so the guard costs nothing in the legitimate case.
+    Two whole-repo refusals remain, both about the walk rather than the issues:
+
+    * **Empty response.** The walk saw nothing while the mirror holds rows. An
+      exception-free empty response is far more likely to mean Issues are
+      disabled, a permissions problem, or an eventual-consistency blip than a
+      repo that genuinely lost every issue.
+    * **Implausible candidate share.** More than `RETIRE_MAX_SHARE` of the
+      mirrored issues went missing at once (subject to `RETIRE_MIN_ALLOWANCE`).
+      A real batch of transfers is a handful; losing a tenth of a repository is
+      a symptom. Refusing here also avoids spending a confirmation read per
+      candidate to reject them one at a time.
+
+    `total_count` -- GitHub's own reported issue count -- is logged as diagnostic
+    context when the walk came up short, since that explains why candidates
+    exist. It is deliberately not a veto: gating on it blocked reconciliation
+    outright on exactly the large, active repositories that accumulate ghosts.
     """
     rows = con.execute(
         "SELECT number FROM issues WHERE repo=? AND is_pr=0", (repo,)
     ).fetchall()
-    if total_count is not None and len(seen) < total_count:
-        log(
-            f"  reconcile {repo}: REFUSING to retire anything -- the walk saw "
-            f"{len(seen)} issue(s) but GitHub reports {total_count}, so pagination "
-            f"raced an update and an unseen issue may still be live. Re-run "
-            f"`sync --full` to retire genuinely absent issues."
-        )
-        return []
     if not seen and rows:
         log(
             f"  reconcile {repo}: REFUSING to retire {len(rows)} mirrored issue(s) "
@@ -153,19 +203,52 @@ def reconcile_repo(
             f"`sync --full` once the cause is resolved."
         )
         return []
-    gone = sorted(r["number"] for r in rows if r["number"] not in seen)
-    for number in gone:
-        db.delete_issue(con, repo, number)
-    con.commit()
-    # A destructive stage announces itself even when it deletes nothing, so an
-    # operator reading the log can see the step ran at all.
-    if gone:
+    if total_count is not None and len(seen) < total_count:
         log(
-            f"  reconcile {repo}: retired {len(gone)} issue(s) GitHub no longer "
-            f"lists (transferred or deleted): {gone}"
+            f"  reconcile {repo}: note -- the walk saw {len(seen)} issue(s) but "
+            f"GitHub reports {total_count}; pagination likely raced an update, so "
+            f"each candidate below is confirmed against GitHub individually."
         )
-    else:
+    candidates = sorted(r["number"] for r in rows if r["number"] not in seen)
+    if not candidates:
         log(f"  reconcile {repo}: nothing to retire")
+        return []
+    allowance = max(RETIRE_MIN_ALLOWANCE, int(len(rows) * RETIRE_MAX_SHARE))
+    if len(candidates) > allowance:
+        log(
+            f"  reconcile {repo}: REFUSING to retire {len(candidates)} candidate(s) "
+            f"-- more than {RETIRE_MAX_SHARE:.0%} of the {len(rows)} mirrored "
+            f"issue(s) went missing at once, which is a symptom of an incomplete "
+            f"walk rather than a batch of transfers. Re-run `sync --full` once the "
+            f"cause is resolved."
+        )
+        return []
+
+    _confirm = confirm if confirm is not None else confirm_retirable
+    gone: list[int] = []
+    for number in candidates:
+        verdict, detail = _confirm(repo, number)
+        if verdict == "gone":
+            db.delete_issue(con, repo, number)
+            gone.append(number)
+            log(f"    {repo}#{number}: retired -- GitHub reports it no longer exists")
+        elif verdict == "transferred":
+            db.delete_issue(con, repo, number)
+            gone.append(number)
+            log(f"    {repo}#{number}: retired -- transferred to {detail}")
+        elif verdict == "live":
+            log(
+                f"    {repo}#{number}: kept -- still live on GitHub, the walk missed it"
+            )
+        else:
+            log(f"    {repo}#{number}: kept -- could not confirm ({detail})")
+    con.commit()
+    # A destructive stage announces itself on every run, so an operator reading
+    # the log alone can say what was deleted and on what evidence.
+    log(
+        f"  reconcile {repo}: {len(candidates)} candidate(s) checked, "
+        f"{len(gone)} retired{': ' + str(gone) if gone else ''}"
+    )
     return gone
 
 
@@ -177,12 +260,14 @@ def sync_issues(
     full: bool = False,
     log: Callable[[str], None] = print,
     on_retire: Callable[[list[int]], None] | None = None,
+    confirm: Callable[[str, int], tuple[str, str | None]] | None = None,
 ) -> int:
     """Sync `repo`'s issues; on a full walk, retire rows GitHub no longer lists.
 
     `on_retire` receives the retired issue numbers, so a caller (e.g. `sync_all`)
     can report the destructive step in its machine-readable totals rather than
-    only in the log.
+    only in the log. `confirm` overrides how a retirement candidate is checked
+    against GitHub; it exists so tests need no network.
     """
     seen: set[int] = set()
 
@@ -197,7 +282,9 @@ def sync_issues(
     # A full walk is exhaustive (no cursor, so it exits only when the connection
     # is drained), and an exception would have propagated before reaching here.
     if full:
-        gone = reconcile_repo(con, repo, seen, total_count=total, log=log)
+        gone = reconcile_repo(
+            con, repo, seen, total_count=total, log=log, confirm=confirm
+        )
         if on_retire is not None:
             on_retire(gone)
     return count
@@ -338,6 +425,7 @@ def sync_all(
     *,
     full: bool = False,
     log: Callable[[str], None] = print,
+    confirm: Callable[[str, int], tuple[str, str | None]] | None = None,
 ) -> dict:
     run_id = db.start_run(con, "sync")
     # "retired" counts mirror rows deleted because GitHub no longer lists the
@@ -352,7 +440,7 @@ def sync_all(
         for repo in repos:
             log(f"syncing {repo} ...")
             totals["issues"] += sync_issues(
-                con, repo, full=full, log=log, on_retire=note_retired
+                con, repo, full=full, log=log, on_retire=note_retired, confirm=confirm
             )
             totals["prs"] += sync_prs(con, repo, full=full)
             totals["comments"] += sync_comments(con, repo, full=full)
