@@ -1,13 +1,13 @@
 {
-  "rstudio/reactlog":   { "createdAt": "2026-07-16T09:00:31Z", "updatedAt": "2026-07-23T00:00:00Z" },
-  "rstudio/shiny":      { "createdAt": "2026-08-13T19:06:39Z", "updatedAt": "2026-08-25T07:35:38Z" },
-  "rstudio/bslib":      { "createdAt": "2026-08-18T16:25:57Z", "updatedAt": "2026-08-20T08:26:26Z" },
-  "rstudio/leaflet":    { "createdAt": "2026-08-28T14:27:38Z", "updatedAt": "2026-08-31T13:53:25Z" },
-  "rstudio/htmltools":  { "createdAt": "2026-07-16T09:00:31Z", "updatedAt": "2026-07-23T00:00:00Z" },
-  "rstudio/shinytest2": { "createdAt": "2026-06-09T12:49:24Z", "updatedAt": "2026-07-23T00:00:00Z" },
-  "rstudio/plumber":    { "createdAt": "2026-07-16T09:00:31Z", "updatedAt": "2026-07-23T00:00:00Z" },
-  "rstudio/promises":   { "createdAt": "2026-07-16T09:00:31Z", "updatedAt": "2026-07-23T00:00:00Z" },
-  "posit-dev/py-shiny": { "createdAt": "2026-09-01T19:49:47Z", "updatedAt": "2026-09-01T19:49:47Z" },
-  "posit-dev/chatlas":  { "createdAt": "2026-09-02T17:23:35Z", "updatedAt": "2026-09-02T17:24:50Z" },
-  "posit-dev/shinychat":{ "createdAt": "2026-09-03T07:53:43Z", "updatedAt": "2026-09-03T07:53:43Z" }
+  "rstudio/reactlog":   { "createdAt": "2026-07-16T09:00:31Z", "updatedAt": "2026-09-10T08:29:28Z" },
+  "rstudio/shiny":      { "createdAt": "2026-08-13T19:06:39Z", "updatedAt": "2026-09-10T08:29:28Z" },
+  "rstudio/bslib":      { "createdAt": "2026-08-18T16:25:57Z", "updatedAt": "2026-09-10T08:29:28Z" },
+  "rstudio/leaflet":    { "createdAt": "2026-08-28T14:27:38Z", "updatedAt": "2026-09-10T08:29:28Z" },
+  "rstudio/htmltools":  { "createdAt": "2026-07-16T09:00:31Z", "updatedAt": "2026-09-10T08:29:28Z" },
+  "rstudio/shinytest2": { "createdAt": "2026-06-09T12:49:24Z", "updatedAt": "2026-09-10T08:29:28Z" },
+  "rstudio/plumber":    { "createdAt": "2026-09-04T15:09:31Z", "updatedAt": "2026-09-10T08:29:28Z" },
+  "rstudio/promises":   { "createdAt": "2026-07-16T09:00:31Z", "updatedAt": "2026-09-10T08:29:28Z" },
+  "posit-dev/py-shiny": { "createdAt": "2026-09-07T02:01:09Z", "updatedAt": "2026-09-10T08:29:28Z" },
+  "posit-dev/chatlas":  { "createdAt": "2026-09-04T00:52:48Z", "updatedAt": "2026-09-10T08:29:28Z" },
+  "posit-dev/shinychat":{ "createdAt": "2026-09-09T16:54:18Z", "updatedAt": "2026-09-10T08:29:28Z" }
 }
