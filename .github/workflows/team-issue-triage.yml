@@ -1,8 +1,8 @@
 name: Team Issue Triage
 
 on:
-  schedule:
-    - cron: "0 8 * * 4" # every Thursday at 08:00 UTC
+  # schedule:
+  #   - cron: "0 8 * * 4" # every Thursday at 08:00 UTC
   workflow_dispatch:
     inputs:
       scan_since:

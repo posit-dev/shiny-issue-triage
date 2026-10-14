@@ -1,6 +1,6 @@
 # Team issue triage
 
-`.github/workflows/team-issue-triage.yml` runs Claude Code every Thursday at 08:00 UTC. You can also start it with workflow dispatch. The workflow reads `.github/triage/team-issue-triage.yaml` for scope, and the first rollout is limited to `rstudio/reactlog`.
+`.github/workflows/team-issue-triage.yml` runs Claude Code on workflow dispatch. Its weekly schedule (Thursday 08:00 UTC) is commented out. The workflow reads `.github/triage/team-issue-triage.yaml` for scope, and the first rollout is limited to `rstudio/reactlog`.
 
 Authentication comes from a Claude Code OAuth token created with `claude setup-token`.
 

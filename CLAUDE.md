@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 repositories. It has two largely independent layers:
 
 - **`.github/triage/`** — the GitHub Actions workflow
-  (`.github/workflows/team-issue-triage.yml`, runs weekly + on dispatch) and its
+  (`.github/workflows/team-issue-triage.yml`, manual dispatch only; weekly cron commented out) and its
   allowlist, label taxonomy, safety rubric, and helper scripts (a mix of Python
   and Node `.mjs`). See `.github/triage/README.md`.
 - **`triage-verse`** — a Python CLI (`src/triage_verse/`, managed with
